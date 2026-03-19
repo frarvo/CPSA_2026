@@ -1,0 +1,60 @@
+# config.yaml
+# Configuration file for the system
+# Can choose logs folder, log details activation, enabled actuators, buffering parameters
+#
+# Author: Francesco Urru
+# Github: https://github.com/frarvo
+# Repository: https://github.com/frarvo/STOPme
+# License: MIT
+
+log_base_path: ~/Desktop/STOPme_logs  # Path where logs are saved. User folder is automatically detected
+
+enable_system_log: true      # Create/Log system status messages
+enable_actuation_detail: false  # Log actuation used for that event
+
+debug_system_console: true   # Choose to print system events on the console
+debug_event_console: true    # Choose to print events on the console
+
+metamotion:
+  enable: true                # Device activation flag
+  scan_timeout: 2             # First scan duration in seconds
+  fast_retry_attempts: 5      # Number of fast retries after a disconnection
+  retry_interval: 5           # Wait time between fast retries
+  retry_sleep: 60             # Wait time between subsequent retries
+
+speaker:
+  enable: true                # Device activation flag
+  scan_timeout: 5             # First scan duration in seconds
+  fast_retry_attempts: 5      # Number of fast retries after a disconnection
+  retry_interval: 10          # Wait time between fast retries
+  retry_sleep: 60             # Wait time between subsequent retries
+
+led_strip:
+  enable: false               # Device activation flag
+  duration: 2500              # Duration in ms
+  scan_timeout: 10            # First scan duration in seconds
+  fast_retry_attempts: 5      # Number of fast retries after a disconnection
+  retry_interval: 5           # Wait time between fast retries
+  retry_sleep: 60             # Wait time between subsequent retries
+
+bluecoins:
+  - id: bc_left
+    name: "STOPmeL"
+  - id: bc_right
+    name: "STOPmeR"
+
+# Sensors data stream parameters for sync
+sync:
+  max_skew_ms: 25         # L/R timing alignment tolerance
+  stale_ms: 100           # Drops sets of data from one wrist if it sits too long waiting for the other wrist
+
+buffer:
+  window_size: 150                        # Samples per window
+  overlap: 75                             # Overlap 50% -> 75 samples step
+  debug_print_buffer: false               # Prints buffer content (high load, 150 samples x 20 channels)
+  debug_print_features: false              # Prints feature vector
+
+policy:
+  attempts: 3         # Number of attempts with the same actuator before changing it
+
+event_queue_size: 5
