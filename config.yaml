@@ -23,7 +23,7 @@ metamotion:
   retry_sleep: 60             # Wait time between subsequent retries
 
 speaker:
-  enable: true                # Device activation flag
+  enable: false                # Device activation flag
   scan_timeout: 5             # First scan duration in seconds
   fast_retry_attempts: 5      # Number of fast retries after a disconnection
   retry_interval: 10          # Wait time between fast retries
