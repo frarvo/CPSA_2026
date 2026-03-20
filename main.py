@@ -7,7 +7,7 @@
 # Processing extracts features from IMU data and arm angle from quaternions, when ready calls classifier.
 # Classifier generates stereotipy event and pushes events to queue.
 # Dispatcher consumes event queue, logs to event diary and calls actuation based on actuation policy.
-# Actuation policy decides which actuator to use and for how long. Has memory for most effective.
+# Actuation policy decides which actuator to use and for how long. Has memory for most effectiveness.
 #
 # Author: Francesco Urru
 # Repository: https://github.com/frarvo/STOPme
