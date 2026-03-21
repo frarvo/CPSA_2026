@@ -108,9 +108,9 @@ class IMUSynchronizer:
             self._try_emit_locked()
             row = self._pending_row
             self._pending_row = None
-            if row:
-                (Racc, Rgyr, Rquat, Lacc, Lgyr, Lquat, ts_emit) = row
-                self.buffer.add_buffer_row(Racc, Rgyr, Rquat, Lacc, Lgyr, Lquat, ts_emit)
+        if row:
+            (Racc, Rgyr, Rquat, Lacc, Lgyr, Lquat, ts_emit) = row
+            self.buffer.add_buffer_row(Racc, Rgyr, Rquat, Lacc, Lgyr, Lquat, ts_emit)
 
     # Internals (lock held)
     # Push synced row to buffer

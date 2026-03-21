@@ -4,10 +4,10 @@
 #
 # Author: Francesco Urru
 # Github: https://github.com/frarvo
-# Repository: https://github.com/frarvo/STOPme
-# License: MIT
+# Repository: https://github.com/frarvo/CPSA_2026
+# License:
 
-log_base_path: ~/Desktop/STOPme_logs  # Path where logs are saved. User folder is automatically detected
+log_base_path: ~/Desktop/CPSA_logs  # Path where logs are saved. User folder is automatically detected
 
 enable_system_log: true      # Create/Log system status messages
 enable_actuation_detail: false  # Log actuation used for that event
@@ -23,14 +23,14 @@ metamotion:
   retry_sleep: 60             # Wait time between subsequent retries
 
 speaker:
-  enable: false                # Device activation flag
+  enable: true                # Device activation flag
   scan_timeout: 5             # First scan duration in seconds
   fast_retry_attempts: 5      # Number of fast retries after a disconnection
   retry_interval: 10          # Wait time between fast retries
   retry_sleep: 60             # Wait time between subsequent retries
 
 led_strip:
-  enable: false               # Device activation flag
+  enable: true               # Device activation flag
   duration: 2500              # Duration in ms
   scan_timeout: 10            # First scan duration in seconds
   fast_retry_attempts: 5      # Number of fast retries after a disconnection

@@ -168,7 +168,7 @@ class DataBuffer:
         # Call C processing
         try:
             if self._debug_print_buffer:
-                log_system("f[DataBuffer] [DEBUG] Pre-processing inputs: "
+                log_system("[DataBuffer] [DEBUG] Pre-processing inputs: "
                             f"{accX_R}, {accY_R}, {accZ_R}, {gyrX_R}, {gyrY_R}, {gyrZ_R}, "
                             f"{accX_L}, {accY_L}, {accZ_L}, {gyrX_L}, {gyrY_L}, {gyrZ_L}, "
                             f"{quatRW_x}, {quatRW_y}, {quatRW_z}, {quatRW_w} ,"

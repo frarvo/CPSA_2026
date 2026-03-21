@@ -12,9 +12,9 @@
 # Author: Francesco Urru
 # Repository: https://github.com/frarvo/STOPme
 # License: MIT
-import sys
+
+
 import time
-from pathlib import Path
 
 from sensors.sensor_manager import SensorManager
 from actuators.actuator_manager import ActuatorManager
@@ -25,9 +25,6 @@ from core.event_dispatcher import EventDispatcher
 from utils.logger import log_system
 from utils.config import get_bluecoin_config
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
 
 def main():
     log_system("[MAIN] Initializing STOPme system...")
