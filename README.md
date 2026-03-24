@@ -356,6 +356,7 @@ dd
 ---
 ## Adding a new feature to BlueCoin sensor
 ### How to create the feature for the desired sensor
+Follow the guide at https://github.com/STMicroelectronics/BlueSTSDK_Python?tab=readme-ov-file#how-to-add-a-new-feature
 feature_mems_sensor_fusion_compact.py
 
 ### How to add the feature to the Blue-ST-SDK
