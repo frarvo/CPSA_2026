@@ -355,7 +355,19 @@ dd
 
 ---
 ## Adding a new feature to BlueCoin sensor
-dd
+### How to create the feature for the desired sensor
+feature_mems_sensor_fusion_compact.py
+
+### How to add the feature to the Blue-ST-SDK
+Open the file at this path: 
+python3.10/site-packages/blue_st_sdk/utils/ble_node_definitions.py
+
+Import the file created previously:
+from sensors import feature_mems_sensor_fusion_compact
+
+Remove the comment relative to the desired feature: 
+0x00000100: feature_mems_sensor_fusion_compact.FeatureMemsSensorFusionCompact,
+
 
 
 ---
