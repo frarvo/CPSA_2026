@@ -1,5 +1,5 @@
 # main.py
-# Entry point for the STOPme system
+# Entry point for the CPSA_2026 system
 # Receives IMU+Quaternion data from dual wrist bracelets (BlueCoin), detect stereotipy events, logs them and calls actuation accordingly.
 # Sensor manage scans for sensors, connect to sensors, sends data to synchronizer,
 # Synchronizer syncs the two data streams and fills a buffer.
@@ -10,7 +10,7 @@
 # Actuation policy decides which actuator to use and for how long. Has memory for most effectiveness.
 #
 # Author: Francesco Urru
-# Repository: https://github.com/frarvo/STOPme
+# Repository: https://github.com/frarvo/CPSA_2026
 # License: MIT
 
 

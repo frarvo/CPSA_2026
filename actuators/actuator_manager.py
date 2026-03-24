@@ -1,9 +1,9 @@
 # actuator_manager.py
-# Manages the lifecycle, initialization and control of actuator devices (LED, speaker, MetaMotionRL).
+# Manages scanning, initialization and lifecycle of actuator devices (LED, speaker, MetaMotionRL).
 #
 # Author: Francesco Urru
 # GitHub: https://github.com/frarvo
-# Repository: https://github.com/frarvo/STOPme
+# Repository: https://github.com/frarvo/CPSA_2026
 # License: MIT
 
 import threading
@@ -46,7 +46,13 @@ class ActuatorManager:
 
         if self.speaker_enable:
             with device_scan_lock:
-                self.speaker_addresses = scan_speaker_devices(5) or []
+                cfg = get_speaker_config() or {}
+                mac = cfg.get("mac")
+                if mac:
+                    self.speaker_addresses = [mac]
+                else:
+                    devices = scan_speaker_devices(5)
+                    self.speaker_addresses = devices if devices else []
         if self.meta_enable:
             with device_scan_lock:
                 self.metamotion_addresses = scan_metamotion_devices(5) or []

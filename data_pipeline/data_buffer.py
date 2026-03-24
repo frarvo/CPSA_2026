@@ -6,6 +6,8 @@
 #   LEFT : acc(3), gyr(3), quat(4)  -> 10..19
 #
 # Author: Francesco Urru
+# GitHub: https://github.com/frarvo
+# Repository: https://github.com/frarvo/CPSA_2026
 # License: MIT
 
 from __future__ import annotations

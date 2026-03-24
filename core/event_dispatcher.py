@@ -3,7 +3,7 @@
 # and triggers actions through the ActuatorManager
 #
 # Author: Francesco Urru
-# Repository: https://github.com/frarvo/STOPme
+# Repository: https://github.com/frarvo/CPSA_2026
 # License: MIT
 
 import queue

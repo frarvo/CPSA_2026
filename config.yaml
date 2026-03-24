@@ -16,13 +16,14 @@ debug_system_console: true   # Choose to print system events on the console
 debug_event_console: true    # Choose to print events on the console
 
 metamotion:
-  enable: true                # Device activation flag
+  enable: false                # Device activation flag
   scan_timeout: 2             # First scan duration in seconds
   fast_retry_attempts: 5      # Number of fast retries after a disconnection
   retry_interval: 5           # Wait time between fast retries
   retry_sleep: 60             # Wait time between subsequent retries
 
 speaker:
+  mac: D4:8C:49:C9:DC:9A      # Device MAC address
   enable: true                # Device activation flag
   scan_timeout: 5             # First scan duration in seconds
   fast_retry_attempts: 5      # Number of fast retries after a disconnection
@@ -30,7 +31,7 @@ speaker:
   retry_sleep: 60             # Wait time between subsequent retries
 
 led_strip:
-  enable: true               # Device activation flag
+  enable: false               # Device activation flag
   duration: 2500              # Duration in ms
   scan_timeout: 10            # First scan duration in seconds
   fast_retry_attempts: 5      # Number of fast retries after a disconnection

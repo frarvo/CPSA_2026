@@ -2,7 +2,7 @@
 # Defines which actuators to activate based on the events.
 #
 # Author: Francesco Urru
-# Repository: https://github.com/frarvo/STOPme
+# Repository: https://github.com/frarvo/CPSA_2026
 # License: MIT
 
 
