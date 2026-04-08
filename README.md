@@ -360,7 +360,7 @@ dd
 
 
 ---
-## Adding a new feature to BlueCoin (To use integrated sensors not available)
+## Adding a new feature to BlueCoin (To use integrated sensors not already available in linux version of BlueST-SDK)
 ### How to create the feature for the desired sensor
 Follow the guide at https://github.com/STMicroelectronics/BlueSTSDK_Python?tab=readme-ov-file#how-to-add-a-new-feature
 feature_mems_sensor_fusion_compact.py
