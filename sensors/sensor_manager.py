@@ -15,7 +15,7 @@ from sensors.bluecoin import scan_bluecoin_devices, BlueCoinThread
 from sensors.feature_listeners import AccelerometerFeatureListener, GyroscopeFeatureListener, QuaternionFeatureListener
 
 
-from data_pipeline.synchronizer import IMUSynchronizer
+from IMU_pipeline.synchronizer import IMUSynchronizer
 from classifiers.stereotipy_classifier import StereotipyClassifier
 
 from utils.config import get_bluecoin_config

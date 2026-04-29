@@ -116,3 +116,7 @@ def get_policy_attempts() -> int:
 # QUEUE SIZE
 def get_event_queue_size() -> int:
     return int(CONFIG.get("event_queue_size", 5))
+
+# MODEL PATH
+def get_dpu_path() -> str:
+    return str(Path(CONFIG["dpu_model_name"]).expanduser())

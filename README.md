@@ -234,7 +234,7 @@ CPSA_2026/
 │   ├── actuation_policy.py
 │   └── event_dispatcher.py
 
-├── data_pipeline/
+├── IMU_pipeline/
 │   ├── data_buffer.py
 │   ├── synchronizer.py
 │   ├── data_processing_wrapper_quat.py

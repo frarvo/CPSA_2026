@@ -27,7 +27,7 @@ class EventDispatcher:
     """
     Creates a thread that consumes event queue and dispatches actions via activation policy.
     """
-    def __init__(self, actuator_manager, policy):
+    def __init__(self, actuator_manager, policy, yolo_thread = None):
         """
         Initializes the dispatcher with actuator manager and activation policies.
         Args:
@@ -40,6 +40,8 @@ class EventDispatcher:
         self._thread = threading.Thread(target=self._process_events, daemon=True)
         self._last_tag = None
         self._last_actuation_time = None
+
+        self.yolo_thread = yolo_thread
 
     def start(self):
         """
@@ -70,6 +72,13 @@ class EventDispatcher:
                     tag = int(raw_tag)
                 except Exception:
                     tag = None
+
+                if self.yolo_thread:
+                    if tag == 2:
+                        self.yolo_thread.activate()
+                    else:
+                        self.yolo_thread.deactivate()
+
                 label = LABELS.get(tag, str(raw_tag))
 
                 now_time = time.monotonic()

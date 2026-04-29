@@ -16,7 +16,7 @@ debug_system_console: true   # Choose to print system events on the console
 debug_event_console: true    # Choose to print events on the console
 
 metamotion:
-  enable: false                # Device activation flag
+  enable: true                # Device activation flag
   scan_timeout: 2             # First scan duration in seconds
   fast_retry_attempts: 5      # Number of fast retries after a disconnection
   retry_interval: 5           # Wait time between fast retries
@@ -24,7 +24,7 @@ metamotion:
 
 speaker:
   mac: D4:8C:49:C9:DC:9A      # Device MAC address
-  enable: true                # Device activation flag
+  enable: false                # Device activation flag
   scan_timeout: 5             # First scan duration in seconds
   fast_retry_attempts: 5      # Number of fast retries after a disconnection
   retry_interval: 10          # Wait time between fast retries
@@ -59,3 +59,5 @@ policy:
   attempts: 3         # Number of attempts with the same actuator before changing it
 
 event_queue_size: 5
+
+dpu_model_name: "/home/ubuntu/Desktop/PROJECT_CPSA_2026/VIDEO_pipeline/pynqdpu.tf_yolov3_voc.DPUCZDX8G_ISA1_B4096.2.5.0.xmodel"
