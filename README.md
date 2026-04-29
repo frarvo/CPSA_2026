@@ -343,6 +343,12 @@ or
 python3 main.py
 ```
 
+
+---
+## How to Add bluetooth drivers to kria board
+dd
+
+
 ---
 ## Adding a new Actuator
 dd
@@ -354,8 +360,25 @@ dd
 
 
 ---
-## Adding a new feature to BlueCoin sensor
+## Adding a new feature to BlueCoin (To use integrated sensors not already available in linux version of BlueST-SDK)
+### How to create the feature for the desired sensor
+Follow the guide at https://github.com/STMicroelectronics/BlueSTSDK_Python?tab=readme-ov-file#how-to-add-a-new-feature
+feature_mems_sensor_fusion_compact.py
+
+### How to add the feature to the Blue-ST-SDK
+Open the file at this path: 
+python3.10/site-packages/blue_st_sdk/utils/ble_node_definitions.py
+
+Import the file created previously:
+from sensors import feature_mems_sensor_fusion_compact
+
+Remove the comment relative to the desired feature: 
+0x00000100: feature_mems_sensor_fusion_compact.FeatureMemsSensorFusionCompact,
+
+---
+## How to use 
 dd
+
 
 
 ---
