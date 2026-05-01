@@ -58,6 +58,6 @@ buffer:
 policy:
   attempts: 3         # Number of attempts with the same actuator before changing it
 
-event_queue_size: 5
+event_queue_size: 1
 
 dpu_model_name: "/home/ubuntu/Desktop/PROJECT_CPSA_2026/VIDEO_pipeline/pynqdpu.tf_yolov3_voc.DPUCZDX8G_ISA1_B4096.2.5.0.xmodel"

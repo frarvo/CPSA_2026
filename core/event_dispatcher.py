@@ -74,10 +74,16 @@ class EventDispatcher:
                     tag = None
 
                 if self.yolo_thread:
-                    if tag == 2:
-                        self.yolo_thread.activate()
+                    if tag in (1, 2):
+                        if not self.yolo_thread.is_active():
+                            self.yolo_thread.activate()
                     else:
-                        self.yolo_thread.deactivate()
+                        if self.yolo_thread.is_active():
+                            self.yolo_thread.deactivate()
+
+                person_detected = None
+                if self.yolo_thread:
+                    person_detected, _ = self.yolo_thread.get_latest_result()
 
                 label = LABELS.get(tag, str(raw_tag))
 
@@ -85,7 +91,11 @@ class EventDispatcher:
                 if tag != self._last_tag:
                     actuations = []
                     # At each tag change call policy to handle event actuation
-                    result = self.policy.handle(event)
+                    if tag in (1, 2) and person_detected is not True:
+                        result = None
+                        log_system("[Dispatcher] Actuation blocked: no person detected.")
+                    else:
+                        result = self.policy.handle(event)
                     if result:
                         try:
                             self.actuator_manager.trigger(
@@ -117,7 +127,15 @@ class EventDispatcher:
                         if should_retry:
                             try:
                                 # Call policy on same tag (policy has internal variation/attemps counter)
-                                result = self.policy.handle(event)
+                                person_detected = None
+                                if self.yolo_thread:
+                                    person_detected, _ = self.yolo_thread.get_latest_result()
+
+                                if person_detected is not True:
+                                    result = None
+                                    log_system("[Dispatcher] Actuation retry blocked: no person detected.")
+                                else:
+                                    result = self.policy.handle(event)
                                 if result:
                                     self.actuator_manager.trigger(
                                         actuator_id=result["actuator_id"],

@@ -162,7 +162,7 @@ class YoloDpuThread(threading.Thread):
         self.latest_result = None
         self.latest_result_ts = None
 
-        self.no_person_timeout_sec = 3.0
+        self.no_person_timeout_sec = 5.0
         self._last_person_seen_ts = None
 
     def activate(self):
@@ -178,6 +178,9 @@ class YoloDpuThread(threading.Thread):
     def get_latest_result(self):
         with self.result_lock:
             return self.latest_result, self.latest_result_ts
+
+    def is_active(self):
+        return self.active_event.is_set()
 
     def run(self):
         """
