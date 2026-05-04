@@ -5,18 +5,17 @@
 # Github: https://github.com/frarvo
 # Repository: https://github.com/frarvo/CPSA_2026
 # License: MIT
-import time
 
 from blue_st_sdk.features.feature_accelerometer import FeatureAccelerometer
 from blue_st_sdk.features.feature_gyroscope import FeatureGyroscope
-from sensors.feature_mems_sensor_fusion_compact import FeatureMemsSensorFusionCompact
+from sensors.BLE.feature_mems_sensor_fusion_compact import FeatureMemsSensorFusionCompact
 
-from sensors.bluecoin import scan_bluecoin_devices, BlueCoinThread
-from sensors.feature_listeners import AccelerometerFeatureListener, GyroscopeFeatureListener, QuaternionFeatureListener
+from sensors.BLE.bluecoin import scan_bluecoin_devices, BlueCoinThread
+from sensors.BLE.feature_listeners import AccelerometerFeatureListener, GyroscopeFeatureListener, QuaternionFeatureListener
 
 
-from IMU_pipeline.synchronizer import IMUSynchronizer
-from classifiers.stereotipy_classifier import StereotipyClassifier
+from IMU_pipeline.data_stream.synchronizer import IMUSynchronizer
+from IMU_pipeline.classifiers.stereotipy_classifier.stereotipy_classifier import StereotipyClassifier
 
 from utils.config import get_bluecoin_config
 from utils.logger import log_system

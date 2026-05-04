@@ -7,12 +7,11 @@
 # License: MIT
 
 import threading
-import time
 from typing import Dict
 
-from actuators.led_strip import scan_led_devices, LedThread
-from actuators.metamotion import scan_metamotion_devices, MetaMotionThread
-from actuators.speaker import scan_speaker_devices, SpeakerThread
+from actuators.WIFI.led_strip import scan_led_devices, LedThread
+from actuators.BLE.metamotion import scan_metamotion_devices, MetaMotionThread
+from actuators.BT.speaker import scan_speaker_devices, SpeakerThread
 from utils.logger import log_system
 from utils.lock import device_scan_lock
 from utils.config import get_speaker_config, get_metamotion_config, get_led_strip_config
