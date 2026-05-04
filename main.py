@@ -19,7 +19,6 @@ import time
 from sensors.sensor_manager import SensorManager
 from actuators.actuator_manager import ActuatorManager
 
-from sensors.USB.camera import YoloDpuThread
 
 from core.actuation_policy import StereotipyActivationPolicy
 from core.event_dispatcher import EventDispatcher
@@ -77,7 +76,7 @@ def main():
     # Instantiate activation policy
     policy = StereotipyActivationPolicy(actuator_ids=actuators_list)
 
-    yolo_thread = YoloDpuThread()
+    yolo_thread = sensor_manager.get_yolo_thread()
 
     # Instantiate event dispatcher
     dispatcher = EventDispatcher(
@@ -90,11 +89,9 @@ def main():
     # Initialize event dispatcher
     try:
         dispatcher.start()
-        yolo_thread.start()
     except Exception as e:
         log_system(f"[MAIN] Failed to start runtime threads: {e}", level="ERROR")
         dispatcher.stop()
-        yolo_thread.stop()
         sensor_manager.stop_all()
         actuator_manager.stop_all()
         return
@@ -111,7 +108,6 @@ def main():
         log_system(f"[MAIN] Unhandled error in main loop: {e}", level="ERROR")
     finally:
         dispatcher.stop()
-        yolo_thread.stop()
         sensor_manager.stop_all()
         actuator_manager.stop_all()
         log_system("[MAIN] System shutdown complete.")
