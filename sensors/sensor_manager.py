@@ -13,7 +13,7 @@ from sensors.BLE.feature_mems_sensor_fusion_compact import FeatureMemsSensorFusi
 from sensors.BLE.bluecoin import scan_bluecoin_devices, BlueCoinThread
 from sensors.BLE.feature_listeners import AccelerometerFeatureListener, GyroscopeFeatureListener, QuaternionFeatureListener
 
-from sensors.USB.camera_yolo import YoloDpuThread
+from sensors.USB.camera import YoloDpuThread
 
 from IMU_pipeline.data_stream.synchronizer import IMUSynchronizer
 from IMU_pipeline.classifiers.stereotipy_classifier.stereotipy_classifier import StereotipyClassifier
