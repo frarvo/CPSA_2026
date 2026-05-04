@@ -19,7 +19,7 @@ import time
 from sensors.sensor_manager import SensorManager
 from actuators.actuator_manager import ActuatorManager
 
-from sensors.USB.yolo_DPU import YoloDpuThread
+from sensors.USB.camera import YoloDpuThread
 
 from core.actuation_policy import StereotipyActivationPolicy
 from core.event_dispatcher import EventDispatcher
