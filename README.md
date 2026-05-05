@@ -43,6 +43,47 @@ The architecture is designed to remain modular and extensible.
 * Modular and extensible architecture
 
 ---
+# README Structure
+
+This README is organized as both a setup guide and a technical overview of the CPSA_2026 system.
+
+The first sections describe the general purpose of the project, its main features, the system architecture, and the current repository structure.
+
+The setup sections cover the required operating system, Python dependencies, DPU/Vitis-AI configuration, Bluetooth setup for the Kria KV260, and BlueST SDK notes.
+
+The architecture sections explain how the IMU pipeline, VIDEO pipeline, event queue, dispatcher, actuation policy, and actuator layer work together at runtime.
+
+The usage section explains how to run the main system entry point and how `main.py` initializes and controls the full runtime.
+
+The extension sections describe how to add new sensors, add new actuators, and modify the actuation policy.
+
+## Table of Contents
+
+- [Features](#features)
+- [System Overview](#system-overview)
+- [Requirements](#requirements)
+- [System Dependencies](#system-dependencies)
+- [Python Dependencies](#python-dependencies)
+- [Project Structure](#project-structure)
+- [IMU Pipeline](#imu-pipeline)
+- [VIDEO Pipeline](#video-pipeline)
+- [DPU / Vitis-AI Setup](#dpu--vitis-ai-setup)
+- [Bluetooth Setup (Kria KV260)](#bluetooth-setup-kria-kv260)
+- [BlueST SDK Setup](#bluest-sdk-setup)
+- [Adding Custom BlueCoin Features](#adding-custom-bluecoin-features)
+- [How It Works](#how-it-works)
+- [Event System](#event-system)
+- [Event Dispatcher](#event-dispatcher)
+- [Actuation Policy](#actuation-policy)
+- [Runtime Lifecycle](#runtime-lifecycle)
+- [Logging](#logging)
+- [Configuration](#configuration)
+- [Usage](#usage)
+- [Adding New Sensors](#adding-new-sensors)
+- [Adding New Actuators](#adding-new-actuators)
+- [Modifying the Actuation Policy](#modifying-the-actuation-policy)
+- [Author](#author)
+---
 
 # System Overview
 
@@ -1057,14 +1098,1337 @@ CTRL + C
 
 # Adding New Sensors
 
-Documentation will be added later.
+Sensors are managed through `SensorManager`.
+
+The current implementation is centered around BLE BlueCoin devices, but the architecture is modular and can be extended to support additional sensors and parallel sensing pipelines.
+
+Current sensor pipeline structure:
+
+```text
+Sensor
+    ▼
+Feature Listener / Callback
+    ▼
+Synchronizer
+    ▼
+DataBuffer
+    ▼
+Processing
+    ▼
+Classifier
+    ▼
+Shared Event Queue
+```
+
+---
+
+# Current BlueCoin Architecture
+
+The current IMU implementation uses:
+
+```text
+sensors/BLE/bluecoin.py
+sensors/BLE/feature_listeners.py
+sensors/sensor_manager.py
+```
+
+The architecture is divided into:
+
+- device discovery
+- device thread management
+- feature listeners
+- synchronization
+- buffering
+- classification
+
+---
+
+# Sensor Types
+
+A new sensor can be integrated in multiple ways:
+
+| Type | Example |
+|---|---|
+| BLE wearable | BlueCoin, MetaWear |
+| Wi-Fi sensor | network camera, ESP32 |
+| USB / serial sensor | Arduino, biomedical devices |
+| software pipeline | computer vision, external APIs |
+| parallel event source | additional classifiers |
+
+The sensor does not necessarily need to feed the IMU pipeline.
+
+It can also publish events directly into the shared event queue.
+
+---
+
+# Sensor Module
+
+Create a new sensor module in the correct category.
+
+Examples:
+
+```bash
+sensors/BLE/new_sensor.py
+sensors/WIFI/new_sensor.py
+sensors/USB/new_sensor.py
+```
+
+Choose the folder based on the communication method.
+
+---
+
+# Scan Function
+
+Sensors should provide a scan function similar to the existing BlueCoin implementation.
+
+Current example:
+
+```python
+scan_bluecoin_devices(timeout)
+```
+
+The function should:
+
+- discover compatible devices
+- return device objects or identifiers
+- handle scan exceptions internally
+- avoid crashing the main runtime
+
+Example:
+
+```python
+def scan_new_sensor_devices(timeout: int):
+    """
+    Scan for compatible sensor devices.
+    """
+    ...
+```
+
+Depending on the sensor type, the returned objects may be:
+
+- BLE nodes
+- MAC addresses
+- serial ports
+- IP addresses
+- camera indexes
+- SDK objects
+
+---
+
+# Sensor Thread
+
+Each physical sensor should run in its own thread.
+
+The current BlueCoin implementation uses:
+
+```python
+BlueCoinThread(threading.Thread)
+```
+
+Responsibilities:
+
+- establish connection
+- enable notifications or streams
+- receive sensor updates
+- reconnect automatically
+- stop safely
+
+Minimal structure:
+
+```python
+import threading
+
+class NewSensorThread(threading.Thread):
+
+    def __init__(self, device):
+        super().__init__(daemon=True)
+
+        self.device = device
+        self.stop_event = threading.Event()
+
+    def run(self):
+        """
+        Main acquisition loop.
+        """
+        ...
+
+    def stop(self):
+        """
+        Stop the thread and release resources.
+        """
+        self.stop_event.set()
+
+        if self.is_alive():
+            self.join()
+```
+
+---
+
+# Feature Listeners (BlueCoin-Specific)
+
+The current BlueCoin implementation uses dedicated feature listeners:
+
+```bash
+sensors/BLE/feature_listeners.py
+```
+
+These listeners are specific to the BlueST SDK notification system.
+
+Examples:
+
+```python
+AccelerometerFeatureListener
+GyroscopeFeatureListener
+QuaternionFeatureListener
+```
+
+Each listener:
+
+- receives BLE notifications
+- extracts feature values
+- converts data to floats
+- forwards samples to the synchronizer
+
+Example:
+
+```python
+self.sync.update(
+    self.device_id,
+    "acc",
+    values,
+    ts=time.monotonic()
+)
+```
+
+This listener architecture is BlueCoin-specific and is not mandatory for other sensors.
+
+Other sensors may instead use:
+
+- polling loops
+- callbacks
+- serial reads
+- sockets
+- SDK event systems
+
+---
+
+# Synchronizer Integration
+
+If the new sensor must participate in synchronized IMU processing, it must integrate with:
+
+```bash
+IMU_pipeline/data_stream/synchronizer.py
+```
+
+Current synchronizer inputs:
+
+```python
+update(device_id, kind, values, ts)
+```
+
+Current supported kinds:
+
+```text
+acc
+gyr
+quat
+```
+
+The synchronizer aligns left and right wrist streams using:
+
+```yaml
+sync:
+  max_skew_ms:
+  stale_ms:
+```
+
+from `config.yaml`.
+
+If the new sensor requires synchronization:
+
+- add a new listener or callback
+- define new feature types if needed
+- extend synchronizer logic accordingly
+
+---
+
+# Feeding the Buffer
+
+The synchronizer emits aligned rows into:
+
+```bash
+IMU_pipeline/data_stream/data_buffer.py
+```
+
+Current row format:
+
+```text
+RIGHT:
+  acc(3)
+  gyr(3)
+  quat(4)
+
+LEFT:
+  acc(3)
+  gyr(3)
+  quat(4)
+```
+
+The buffer then:
+
+- creates sliding windows
+- applies preprocessing
+- aligns quaternions
+- calls the C processing pipeline
+- forwards features to the classifier
+
+If the new sensor changes the data structure, the following may require updates:
+
+```text
+synchronizer.py
+data_buffer.py
+C processing library
+classifier wrapper
+```
+
+---
+
+# Sensors That Do Not Use the IMU Pipeline
+
+Not all sensors need synchronization or buffering.
+
+Example:
+
+```text
+camera pipeline
+radar pipeline
+microphone pipeline
+external AI model
+```
+
+These sensors can:
+
+- process data independently
+- generate events directly
+- push events into the shared event queue
+
+Current example:
+
+```bash
+VIDEO_pipeline/yolo_DPU.py
+```
+
+The vision pipeline runs independently from the IMU pipeline.
+
+---
+
+# Event Generation
+
+Sensors or pipelines can publish events using:
+
+```python
+enqueue_drop_oldest(...)
+```
+
+from:
+
+```bash
+utils/event_queue.py
+```
+
+Example event structure:
+
+```python
+event = {
+    "id": uuid.uuid4().hex,
+    "timestamp": datetime.now().isoformat(),
+    "source": "new_sensor",
+    "stereotipy_tag": "1"
+}
+```
+
+Events are consumed by:
+
+```bash
+core/event_dispatcher.py
+```
+
+---
+
+# Registering the Sensor
+
+To register a new sensor:
+
+1. import the sensor module inside:
+
+```bash
+sensors/sensor_manager.py
+```
+
+2. add scan logic inside:
+
+```python
+scan_sensors()
+```
+
+3. add initialization logic inside:
+
+```python
+initialize_sensors()
+```
+
+4. start the sensor thread
+
+Example:
+
+```python
+thread = NewSensorThread(device)
+thread.start()
+self.threads.append(thread)
+```
+
+---
+
+# Configuration
+
+Add sensor configuration inside:
+
+```bash
+config.yaml
+```
+
+Example:
+
+```yaml
+new_sensor:
+  enable: true
+  scan_timeout: 5
+  retry_interval: 5
+```
+
+If needed, add helper functions inside:
+
+```bash
+utils/config.py
+```
+
+---
+
+# Reconnection Handling
+
+Wireless sensors should implement automatic reconnection.
+
+Current BLE implementation uses:
+
+```python
+device_reconnection_lock
+```
+
+from:
+
+```bash
+utils.lock
+```
+
+This prevents multiple devices from reconnecting simultaneously.
+
+Recommended pattern:
+
+- fast retry loop
+- slow retry loop
+- interruptible waits
+- graceful shutdown support
+
+---
+
+# Logging
+
+Use:
+
+```python
+log_system(...)
+```
+
+for internal runtime messages.
+
+Avoid excessive logging inside high-frequency callbacks.
+
+---
+
+# Implementation Checklist
+
+To add a new sensor:
+
+1. create the sensor module
+2. implement device discovery
+3. implement the acquisition thread
+4. implement listeners or callbacks if needed
+5. add reconnection logic if needed
+6. register the sensor inside `SensorManager`
+7. add configuration inside `config.yaml`
+8. integrate with the synchronizer if required
+9. integrate with the buffer if required
+10. generate events or features
+11. test the sensor independently
+12. test the full pipeline integration
 
 ---
 
 # Adding New Actuators
 
-Documentation will be added later.
+Actuators are managed through `ActuatorManager`.
 
+Each actuator module should follow the same general structure used by the existing actuators:
+
+- `actuators/BLE/metamotion.py`
+- `actuators/BT/speaker.py`
+- `actuators/WIFI/led_strip.py`
+
+The common pattern is:
+
+1. provide a scan function
+2. implement a thread class
+3. expose an `execute(...)` method
+4. expose a `stop()` method
+5. register the actuator inside `ActuatorManager`
+6. add configuration in `config.yaml`
+7. update the actuation policy if the actuator needs new parameters
+
+---
+
+## Actuator Module
+
+Create a new file inside the correct actuator category.
+
+Examples:
+
+```bash
+actuators/BLE/new_actuator.py
+actuators/BT/new_actuator.py
+actuators/WIFI/new_actuator.py
+```
+
+Choose the folder based on the communication method.
+
+---
+
+## Scan Function
+
+Each actuator module should provide a scan function that returns device identifiers.
+
+Examples from existing actuators:
+
+```python
+scan_metamotion_devices(timeout)  # returns BLE MAC addresses
+scan_speaker_devices(timeout)     # returns Bluetooth MAC addresses
+scan_led_devices(timeout)         # returns Wi-Fi IP addresses
+```
+
+The return value must be a list.
+
+Example:
+
+```python
+def scan_new_actuator_devices(timeout: int) -> list[str]:
+    """
+    Scan for available actuator devices.
+
+    Returns:
+        list[str]: device identifiers such as MAC addresses or IP addresses.
+    """
+    ...
+```
+
+Depending on the actuator, the identifier can be:
+
+- BLE MAC address
+- Bluetooth MAC address
+- IP address
+- serial port
+- logical device name
+
+---
+
+## Actuator Thread
+
+Each actuator should run in its own thread.
+
+The thread is responsible for:
+
+- device connection
+- waiting for commands
+- executing actions
+- handling reconnection if needed
+- releasing resources during shutdown
+
+Minimal structure:
+
+```python
+import threading
+
+class NewActuatorThread(threading.Thread):
+    def __init__(self, device_id: str):
+        super().__init__(daemon=True)
+        self.device_id = device_id
+        self.stop_event = threading.Event()
+        self.event = threading.Event()
+
+    def run(self):
+        """
+        Connect to the actuator and wait for commands.
+        """
+        ...
+
+    def execute(self, **kwargs):
+        """
+        Execute an actuator command.
+        """
+        ...
+
+    def stop(self):
+        """
+        Stop the actuator thread and release resources.
+        """
+        self.stop_event.set()
+        self.event.set()
+
+        if threading.current_thread() is not self and self.is_alive():
+            self.join()
+```
+
+---
+
+## `execute(...)` Interface
+
+Every actuator must expose an `execute(...)` method.
+
+This is the method called by `ActuatorManager`.
+
+The dispatcher does not call actuator-specific methods directly.
+
+Runtime call chain:
+
+```text
+EventDispatcher
+        ▼
+StereotipyActivationPolicy
+        ▼
+ActuatorManager.trigger(...)
+        ▼
+actuator.execute(**params)
+```
+
+Existing examples:
+
+```python
+# MetaMotion
+def execute(self, **kwargs):
+    duty = kwargs.get("duty", 100)
+    duration = kwargs.get("duration", 500)
+    self.set_vibration(duty, duration)
+```
+
+```python
+# Speaker
+def execute(self, **kwargs):
+    file = kwargs.get("file")
+    self.file = file
+    self.event.set()
+```
+
+```python
+# LED strip
+def execute(
+    self,
+    *,
+    pattern=None,
+    color=None,
+    intensity=100,
+    speed=100,
+    duration=None,
+):
+    ...
+```
+
+The parameters accepted by `execute(...)` must match the parameters generated by the actuation policy.
+
+---
+
+## `stop()` Method
+
+Every actuator must expose a `stop()` method.
+
+It should:
+
+- signal the thread to stop
+- wake the thread if it is waiting
+- cancel timers if used
+- disconnect or release hardware resources
+- join the thread safely
+
+Example:
+
+```python
+def stop(self):
+    self.stop_event.set()
+    self.event.set()
+
+    if threading.current_thread() is not self and self.is_alive():
+        self.join()
+```
+
+---
+
+## Reconnection Logic
+
+Wireless actuators should handle disconnections internally.
+
+Existing actuator examples use:
+
+```python
+device_reconnection_lock
+```
+
+from:
+
+```python
+utils.lock
+```
+
+This avoids multiple devices trying to reconnect at the same time.
+
+Typical reconnection configuration is stored in `config.yaml`:
+
+```yaml
+fast_retry_attempts: 5
+retry_interval: 5
+retry_sleep: 60
+```
+
+Use this pattern for actuators that require persistent connections.
+
+---
+
+## Registering the Actuator
+
+After implementing the actuator module, register it inside:
+
+```bash
+actuators/actuator_manager.py
+```
+
+Import the scan function and thread class:
+
+```python
+from actuators.WIFI.new_actuator import scan_new_actuator_devices, NewActuatorThread
+```
+
+Add fields inside `ActuatorManager.__init__()`:
+
+```python
+self.new_actuator_addresses = []
+self.new_actuator_enable = False
+```
+
+Add scan logic inside `scan_actuators()`:
+
+```python
+self.new_actuator_enable = (get_new_actuator_config() or {}).get("enable", True)
+
+if self.new_actuator_enable:
+    with device_scan_lock:
+        self.new_actuator_addresses = scan_new_actuator_devices(5) or []
+```
+
+Add initialization logic inside `initialize_actuators()`:
+
+```python
+if self.new_actuator_enable:
+    for address in self.new_actuator_addresses:
+        try:
+            actuator_id = f"new_{address}"
+            thread = NewActuatorThread(address)
+            thread.start()
+            self.actuators[actuator_id] = thread
+            log_system(f"[ActuatorManager] New actuator initialized: {actuator_id}")
+        except Exception as e:
+            log_system(
+                f"[ActuatorManager] New actuator {address} initialization failed: {e}",
+                level="ERROR"
+            )
+```
+
+---
+
+## Actuator IDs
+
+Each actuator is registered with a unique ID.
+
+Current actuator ID prefixes:
+
+```text
+led_      → Wi-Fi LED strip
+meta_     → BLE MetaMotion
+speaker_  → Bluetooth speaker
+```
+
+New actuators should follow the same convention:
+
+```text
+<prefix>_<device_identifier>
+```
+
+Example:
+
+```text
+new_192.168.1.100
+new_AA:BB:CC:DD:EE:FF
+```
+
+The prefix is important because the actuation policy uses it to decide which parameters to generate.
+
+---
+
+## Updating the Actuation Policy
+
+If the new actuator needs custom parameters, update:
+
+```bash
+core/actuation_policy.py
+```
+
+Add a new branch inside `_params_for(...)`.
+
+Example:
+
+```python
+elif actuator_id.startswith("new_"):
+    params = {
+        "param_1": value_1,
+        "param_2": value_2,
+    }
+```
+
+Then return:
+
+```python
+return {
+    "actuator_id": actuator_id,
+    "params": params,
+}
+```
+
+The returned `params` dictionary is passed directly to:
+
+```python
+actuator.execute(**params)
+```
+
+---
+
+## Configuration
+
+Add a configuration section in:
+
+```bash
+config.yaml
+```
+
+Example:
+
+```yaml
+new_actuator:
+  enable: true
+  scan_timeout: 5
+  fast_retry_attempts: 5
+  retry_interval: 5
+  retry_sleep: 60
+```
+
+If needed, add a helper function in:
+
+```bash
+utils/config.py
+```
+
+Example:
+
+```python
+def get_new_actuator_config():
+    return get_config().get("new_actuator", {})
+```
+
+---
+
+## Implementation Checklist
+
+To add a new actuator:
+
+1. create the actuator module
+2. implement the scan function
+3. implement the actuator thread
+4. implement `execute(...)`
+5. implement `stop()`
+6. add configuration in `config.yaml`
+7. add a config helper in `utils/config.py` if needed
+8. import the actuator inside `ActuatorManager`
+9. add scan logic inside `scan_actuators()`
+10. add initialization logic inside `initialize_actuators()`
+11. add policy parameter generation if needed
+12. test the actuator independently
+13. test it through the full dispatcher-policy-manager chain
+---
+
+# Modifying the Actuation Policy
+
+The actuation policy defines how the system reacts to detected events.
+
+The policy is responsible for:
+
+- interpreting classifier outputs
+- selecting which actuator to trigger
+- generating actuator parameters
+- retrying failed or ineffective feedback
+- switching actuator strategies
+- enforcing cooldown logic
+
+Main implementation:
+
+```bash
+core/actuation_policy.py
+```
+
+The policy is executed by:
+
+```bash
+core/event_dispatcher.py
+```
+
+Runtime flow:
+
+```text
+Classifier
+    ▼
+Shared Event Queue
+    ▼
+EventDispatcher
+    ▼
+StereotipyActivationPolicy
+    ▼
+ActuatorManager
+    ▼
+Actuator.execute(...)
+```
+
+---
+
+# Current Event Tags
+
+Current classifier outputs:
+
+| Tag | Meaning |
+|---|---|
+| `0` | No class |
+| `1` | Non-dangerous stereotypy |
+| `2` | Dangerous stereotypy |
+| `3` | Non-stereotypy |
+
+Defined in:
+
+```python
+TAG_NO_CLASS = 0
+TAG_NON_DANGEROUS = 1
+TAG_DANGEROUS = 2
+TAG_NON_STEREOTIPY = 3
+```
+
+These values are used by:
+
+- classifier
+- dispatcher
+- actuation policy
+
+---
+
+# Current Policy Behavior
+
+Current logic:
+
+- tags `1` and `2` trigger actuation
+- tags `0` and `3` reset the policy state
+- repeated events retry the same actuator
+- after several attempts the policy switches actuator
+- each actuator cycles through parameter variations
+
+Example:
+
+```text
+dangerous event
+    ▼
+LED feedback
+    ▼
+same event persists
+    ▼
+different LED variation
+    ▼
+same event persists
+    ▼
+switch to speaker
+```
+
+---
+
+# EventDispatcher Integration
+
+The dispatcher consumes events from the shared queue:
+
+```python
+event = q.get(timeout=0.5)
+```
+
+Then calls:
+
+```python
+result = self.policy.handle(event)
+```
+
+The policy returns:
+
+```python
+{
+    "actuator_id": actuator_id,
+    "params": params
+}
+```
+
+The dispatcher forwards the action to:
+
+```python
+self.actuator_manager.trigger(...)
+```
+
+---
+
+# Adding New Event Classes
+
+To support additional event types:
+
+1. define a new tag constant
+2. update label mappings
+3. add policy handling logic
+4. update the classifier output if needed
+
+Example:
+
+```python
+TAG_STRESS = 4
+```
+
+Update dispatcher labels:
+
+```python
+LABELS = {
+    ...
+    4: "STRESS"
+}
+```
+
+Then modify:
+
+```python
+handle(...)
+```
+
+inside:
+
+```bash
+core/actuation_policy.py
+```
+
+---
+
+# Actuator Selection
+
+The current implementation stores all available actuators:
+
+```python
+self.actuator_ids
+```
+
+Actuator selection is performed using:
+
+```python
+_pick_random(...)
+```
+
+Current actuator prefixes:
+
+```text
+led_
+meta_
+speaker_
+```
+
+The policy uses the prefix to determine which parameter set to generate.
+
+Example:
+
+```python
+if actuator_id.startswith("led_"):
+```
+
+---
+
+# Parameter Variations
+
+Each actuator type defines multiple parameter variations.
+
+Current examples:
+
+```python
+_led_variants_mild
+_led_variants_strong
+
+_meta_variants_mild
+_meta_variants_strong
+
+_spk_variants_mild
+_spk_variants_strong
+```
+
+The policy cycles through these variations during repeated events.
+
+Example:
+
+```python
+{"color": (255,0,0,0), "intensity":100}
+```
+
+or:
+
+```python
+{"duty":100, "duration":900}
+```
+
+These dictionaries are passed directly to:
+
+```python
+actuator.execute(**params)
+```
+
+---
+
+# Adding Support for New Actuators
+
+If a new actuator is added, update:
+
+```python
+_params_for(...)
+```
+
+Example:
+
+```python
+elif actuator_id.startswith("new_"):
+    variants = self._new_variants_mild if mild else self._new_variants_strong
+
+    params = variants[
+        variation_index % len(variants)
+    ]
+```
+
+Then return:
+
+```python
+return {
+    "actuator_id": actuator_id,
+    "params": params
+}
+```
+
+---
+
+# Retry Logic
+
+The current policy retries the same actuator before switching.
+
+Configured by:
+
+```yaml
+policy:
+  attempts: 3
+```
+
+from:
+
+```bash
+config.yaml
+```
+
+Internal state:
+
+```python
+self._attempts_on_current
+```
+
+Once the retry limit is reached:
+
+```python
+self._current_actuator = self._pick_random(
+    exclude=self._current_actuator
+)
+```
+
+---
+
+# Variation Cycling
+
+Each actuator maintains its own variation index.
+
+Example:
+
+```python
+self._variation_idx_per_actuator
+```
+
+This allows parameter progression independently for each actuator.
+
+Example:
+
+```text
+LED:
+  variation 1
+  variation 2
+  variation 3
+
+Speaker:
+  variation 1
+  variation 2
+```
+
+---
+
+# Cooldowns
+
+The policy can enforce cooldowns.
+
+Current example:
+
+```python
+self._spk_cooldown_sec = 5
+```
+
+Used to avoid excessive audio feedback.
+
+Cooldown checks occur before actuation generation.
+
+Example:
+
+```python
+if now - last < self._spk_cooldown_sec:
+    return None
+```
+
+---
+
+# Reset Logic
+
+When the classifier returns:
+
+```text
+0 -> NO_CLASS
+3 -> NON_STEREOTIPY
+```
+
+the policy resets internal state:
+
+```python
+_reset_state()
+```
+
+This clears:
+
+- current actuator
+- retry counters
+- active event state
+
+The LED actuator additionally receives an OFF command.
+
+---
+
+# Dispatcher Cooldown
+
+The dispatcher itself also contains retry timing logic.
+
+Defined in:
+
+```python
+ACTUATION_COOLDOWN = 5
+```
+
+inside:
+
+```bash
+core/event_dispatcher.py
+```
+
+This prevents continuous retriggering at every incoming event.
+
+---
+
+# Vision-Based Gating
+
+The dispatcher optionally integrates with the YOLO DPU pipeline.
+
+Current logic:
+
+```python
+person_detected, _ = self.yolo_thread.get_latest_result()
+```
+
+If no person is detected:
+
+```python
+result = None
+```
+
+and actuation is blocked.
+
+This allows sensor detections to be conditionally validated by external pipelines.
+
+---
+
+# Extending Policy Logic
+
+The policy can be extended with:
+
+- adaptive feedback scoring
+- reinforcement learning
+- patient-specific adaptation
+- time-based escalation
+- multimodal coordination
+- context-aware filtering
+- actuator effectiveness memory
+- confidence-based feedback
+- pipeline fusion logic
+
+The architecture is intentionally modular to support future experimentation.
+
+---
+
+# Implementation Checklist
+
+To modify the actuation policy:
+
+1. update event definitions if needed
+2. modify `handle(...)`
+3. modify `_params_for(...)`
+4. add parameter variants
+5. update cooldown logic if needed
+6. update retry logic if needed
+7. verify actuator compatibility
+8. test through `EventDispatcher`
+9. test full runtime behavior
 ---
 
 # Author
