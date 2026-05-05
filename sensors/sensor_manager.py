@@ -13,8 +13,6 @@ from sensors.BLE.feature_mems_sensor_fusion_compact import FeatureMemsSensorFusi
 from sensors.BLE.bluecoin import scan_bluecoin_devices, BlueCoinThread
 from sensors.BLE.feature_listeners import AccelerometerFeatureListener, GyroscopeFeatureListener, QuaternionFeatureListener
 
-from sensors.USB.camera import YoloDpuThread
-
 from IMU_pipeline.data_stream.synchronizer import IMUSynchronizer
 from IMU_pipeline.classifiers.stereotipy_classifier.stereotipy_classifier import StereotipyClassifier
 
@@ -43,7 +41,6 @@ class SensorManager:
         self.classifier = StereotipyClassifier()
         self.synchronizer.buffer.set_features_sink(self.classifier.recognize)
         log_system("[SensorManager] Initialized")
-        self.yolo_thread = YoloDpuThread()
 
     def scan_sensors(self):
         """Performs BLE scan for BlueCoin devices and stores results internally."""
@@ -144,11 +141,6 @@ class SensorManager:
             except Exception as e:
                 log_system(f"[SensorManager] Error initializing thread for '{sensor_id}'/'{expected_name}': {e}", level="ERROR")
 
-        try:
-            self.yolo_thread.start()
-            log_system("[SensorManager] YOLO camera thread initialized")
-        except Exception as e:
-            log_system(f"[SensorManager] YOLO camera thread initialization failed: {e}", level="ERROR")
 
         log_system("[SensorManager] All sensor threads initialized")
 
@@ -162,10 +154,6 @@ class SensorManager:
                 log_system(f"[SensorManager] Error stopping thread for device '{thread.device_id}': {e}", level="ERROR")
         self.threads.clear()
 
-        try:
-            self.yolo_thread.stop()
-        except Exception as e:
-            log_system(f"[SensorManager] Error stopping YOLO camera thread: {e}", level="ERROR")
 
         log_system("[SensorManager] All sensor threads stopped.")
 
@@ -177,6 +165,3 @@ class SensorManager:
             return [n.get_name() for n in self.bluecoins if n.get_name()]
         except Exception:
             return []
-
-    def get_yolo_thread(self):
-        return self.yolo_thread

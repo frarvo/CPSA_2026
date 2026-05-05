@@ -80,8 +80,8 @@ class EventDispatcher:
                 label = LABELS.get(tag, str(raw_tag))
 
                 now_time = time.monotonic()
-
                 if tag != self._last_tag:
+
                     if self.yolo_thread:
                         if tag in (1, 2):
                             if not self.yolo_thread.is_active():
@@ -92,7 +92,7 @@ class EventDispatcher:
 
                     actuations = []
                     # At each tag change call policy to handle event actuation
-                    if tag in (1, 2) and person_detected is not True:
+                    if tag in (1, 2) and person_detected is not None:
                         result = None
                         log_system("[Dispatcher] Actuation blocked: no person detected.")
                     else:
