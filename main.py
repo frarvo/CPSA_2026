@@ -23,7 +23,7 @@ from actuators.actuator_manager import ActuatorManager
 from core.actuation_policy import StereotipyActivationPolicy
 from core.event_dispatcher import EventDispatcher
 
-from VIDEO_pipeline.yolo_DPU import YoloDpuThread
+from VIDEO_pipeline.YOLO.yolo_thread import YoloDpuThread
 
 
 from utils.logger import log_system

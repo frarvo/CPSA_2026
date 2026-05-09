@@ -221,7 +221,7 @@ CPSA_2026/
 │
 ├── VIDEO_pipeline/
 │   ├── pynqdpu.tf_yolov3_voc.DPUCZDX8G_ISA1_B4096.2.5.0.xmodel
-│   └── yolo_DPU.py
+│   └── yolo_thread.py
 │
 ├── config.yaml
 ├── CPSA_RUN.sh
@@ -254,7 +254,7 @@ The pipeline currently supports dual BlueCoin devices.
 The system includes a camera-based parallel pipeline implemented in:
 
 ```bash
-VIDEO_pipeline/yolo_DPU.py
+VIDEO_pipeline/yolo_thread.py
 ```
 
 This pipeline runs YOLOv3 inference on a USB camera stream using the Xilinx DPU runtime.
@@ -740,7 +740,7 @@ Generated events are pushed into the shared event queue.
 The system includes a camera-based parallel pipeline implemented in:
 
 ```bash
-VIDEO_pipeline/yolo_DPU.py
+VIDEO_pipeline/yolo_thread.py
 ```
 
 This pipeline runs YOLOv3 inference on a USB camera stream using the Xilinx DPU runtime.
@@ -1415,7 +1415,7 @@ These sensors can:
 Current example:
 
 ```bash
-VIDEO_pipeline/yolo_DPU.py
+VIDEO_pipeline/yolo_thread.py
 ```
 
 The vision pipeline runs independently from the IMU pipeline.

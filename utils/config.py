@@ -117,6 +117,10 @@ def get_policy_attempts() -> int:
 def get_event_queue_size() -> int:
     return int(CONFIG.get("event_queue_size", 5))
 
-# MODEL PATH
-def get_dpu_path() -> str:
-    return str(Path(CONFIG["dpu_model_name"]).expanduser())
+# YOLO XMODEL PATH
+def get_yolo_path() -> str:
+    return str(Path(CONFIG["yolo_model_name"]).expanduser())
+
+# MOVENET XMODEL PATH
+def get_movenet_path() -> str:
+    return str(Path(CONFIG["movenet_model_name"]).expanduser())

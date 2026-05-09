@@ -1,4 +1,4 @@
-#yolo_DPU.py
+#yolo_thread.py
 
 import cv2
 import numpy as np
@@ -7,7 +7,7 @@ import xir
 import threading
 import time
 
-from utils.config import get_dpu_path
+from utils.config import get_yolo_path
 
 
 # ---------------------- CLASS NAMES ---------------------- #
@@ -254,7 +254,7 @@ class YoloDpuThread(threading.Thread):
         When active, it opens the camera, processes frames, updates person detection,
         and closes the camera when deactivated or when no person is detected for the timeout.
         """
-        model_path = get_dpu_path()
+        model_path = get_yolo_path()
 
         # Load the compiled xmodel graph.
         graph = xir.Graph.deserialize(model_path)
