@@ -17,6 +17,10 @@ from utils.config import (
     debug_system_console_enabled,
     debug_event_console_enabled
 )
+try:
+    from utils.video_dashboard import dashboard_console_log
+except Exception:
+    dashboard_console_log = None
 
 def _ensure_dir(path: Path):
     """Ensure a directory exists, create it if needed."""
@@ -31,6 +35,21 @@ def _get_day_folder(base_dir: Path) -> Path:
     full_path = base_dir / day_folder
     _ensure_dir(full_path)
     return full_path
+
+def _dashboard_log(line: str):
+    """
+    Forward log lines to the optional OpenCV dashboard console.
+
+    This is intentionally best-effort:
+    logging must never fail because the dashboard is unavailable.
+    """
+    if dashboard_console_log is None:
+        return
+
+    try:
+        dashboard_console_log(line.strip())
+    except Exception:
+        pass
 
 def log_events(timestamp: str, feature_type: str, event: str, actuations: list, source: str):
     """
@@ -64,6 +83,7 @@ def log_events(timestamp: str, feature_type: str, event: str, actuations: list, 
     log_filename = f"Event_Diary_{source}.log"
     log_path = folder / log_filename
     line_txt = f"[{date_str} {time_str}] - {feature_type.upper()} - {event} - {action_str}\n"
+    _dashboard_log(line_txt)
 
     with logging_lock:
         with open(log_path, "a") as f:
@@ -95,6 +115,7 @@ def log_system(message: str, level: str = "INFO"):
     date = datetime.now().strftime("%d-%m-%Y")
     time = datetime.now().strftime("%H:%M:%S")
     line = f"[{date} {time}] - {level.upper()} - {message}\n"
+    _dashboard_log(line)
 
     if debug_system_console_enabled():
         print(line.strip())
@@ -206,6 +227,8 @@ def log_event(timestamp: str,
             log_system("[logger] Log line index out of range; skipping duration update", level="WARNING")
 
     line_txt = f"[{date_str} {time_str}] - {feature_type.upper()} - {event} - {action_str}\n"
+    _dashboard_log(line_txt)
+
     with logging_lock:
         with open(log_path, "a") as f_log:
             f_log.write(line_txt)

@@ -1,121 +1,155 @@
 # main.py
-# Entry point for the CPSA_2026 system
-# Receives IMU+Quaternion data from dual wrist bracelets (BlueCoin), detect stereotipy events, logs them and calls actuation accordingly.
-# Sensor manage scans for sensors, connect to sensors, sends data to synchronizer,
-# Synchronizer syncs the two data streams and fills a buffer.
-# Buffer fill up and call processing.
-# Processing extracts features from IMU data and arm angle from quaternions, when ready calls classifier.
-# Classifier generates stereotipy event and pushes events to queue.
-# Dispatcher consumes event queue, logs to event diary and calls actuation based on actuation policy.
-# Actuation policy decides which actuator to use and for how long. Has memory for most effectiveness.
-#
-# Author: Francesco Urru
-# Repository: https://github.com/frarvo/CPSA_2026
-# License: MIT
-
 
 import time
 
 from sensors.sensor_manager import SensorManager
 from actuators.actuator_manager import ActuatorManager
 
-
 from core.actuation_policy import StereotipyActivationPolicy
 from core.event_dispatcher import EventDispatcher
 
 from VIDEO_pipeline.YOLO.yolo_thread import YoloDpuThread
-
+from VIDEO_pipeline.MOVENET.movenet_thread import MoveNetDpuThread
 
 from utils.logger import log_system
 from utils.config import get_bluecoin_config
+from utils.video_dashboard import (
+    VideoDashboard,
+    register_dashboard_console,
+    unregister_dashboard_console,
+)
 
 
 def main():
-    log_system("[MAIN] Initializing STOPme system...")
+    dashboard = None
+    sensor_manager = None
+    actuator_manager = None
+    yolo_thread = None
+    movenet_thread = None
+    dispatcher = None
 
-    # Initialize managers
-    sensor_manager = SensorManager()
-    actuator_manager = ActuatorManager()
-
-    # Scan sensors
-    sensor_manager.scan_sensors()
-
-    # Repeats scan to ensure that required BlueCoin sensors are present
-    expected_names = {entry.get("name") for entry in get_bluecoin_config() if entry.get("name")}
-    if expected_names:
-        max_sensor_retries = 5
-        retry_delay_sec = 5
-        attempt = 0
-        def actual_sensors():
-            return set(sensor_manager.get_sensors_names())
-
-        while not expected_names.issubset(actual_sensors()) and attempt < max_sensor_retries:
-            missing = expected_names - actual_sensors()
-            log_system(f"[MAIN] Waiting for BlueCoin sensors: missing = {missing}. "
-                       f"Retrying in {retry_delay_sec}s "
-                       f"({attempt+1}/{max_sensor_retries})",
-                       level="WARNING"
-                       )
-            time.sleep(retry_delay_sec)
-            sensor_manager.scan_sensors()
-            attempt += 1
-        if not expected_names.issubset(actual_sensors()):
-            log_system(f"[MAIN] Required BlueCoin sensors not found. Aborting startup.", level="ERROR")
-            return
-
-    # Scan actuators
-    actuator_manager.scan_actuators()
-
-    # Initialize sensors and actuators
-    actuator_manager.initialize_actuators()
-    sensor_manager.initialize_sensors()
-
-    # Extract actuator lists
-    actuators_list = actuator_manager.get_actuators_ids()
-    if not actuators_list:
-        log_system("[MAIN] No actuators discovered. Event detection and logging still executing")
-
-    # Instantiate activation policy
-    policy = StereotipyActivationPolicy(actuator_ids=actuators_list)
-
-    yolo_thread = YoloDpuThread()
-
-    # Instantiate event dispatcher
-    dispatcher = EventDispatcher(
-        actuator_manager=actuator_manager,
-        policy=policy,
-        yolo_thread=yolo_thread
-    )
-
-
-    # Initialize event dispatcher
     try:
-        dispatcher.start()
+        dashboard = VideoDashboard(
+            window_name="CPSA Dashboard",
+            fullscreen=False
+        )
+
+        register_dashboard_console(dashboard)
+
+        log_system("[MAIN] Initializing STOPme system...")
+
+        sensor_manager = SensorManager()
+        actuator_manager = ActuatorManager()
+
+        sensor_manager.scan_sensors()
+
+        expected_names = {
+            entry.get("name")
+            for entry in get_bluecoin_config()
+            if entry.get("name")
+        }
+
+        if expected_names:
+            max_sensor_retries = 5
+            retry_delay_sec = 5
+            attempt = 0
+
+            def actual_sensors():
+                return set(sensor_manager.get_sensors_names())
+
+            while not expected_names.issubset(actual_sensors()) and attempt < max_sensor_retries:
+                missing = expected_names - actual_sensors()
+                log_system(
+                    f"[MAIN] Waiting for BlueCoin sensors: missing = {missing}. "
+                    f"Retrying in {retry_delay_sec}s "
+                    f"({attempt + 1}/{max_sensor_retries})",
+                    level="WARNING",
+                )
+
+                wait_start = time.monotonic()
+                while time.monotonic() - wait_start < retry_delay_sec:
+                    dashboard.render(yolo_thread, movenet_thread)
+                    key = dashboard.wait_key(1)
+
+                    if key == ord("q"):
+                        log_system("[MAIN] GUI quit requested during sensor scan.")
+                        return
+
+                    time.sleep(0.01)
+
+                sensor_manager.scan_sensors()
+                attempt += 1
+
+            if not expected_names.issubset(actual_sensors()):
+                log_system("[MAIN] Required BlueCoin sensors not found. Aborting startup.", level="ERROR")
+                return
+
+        actuator_manager.scan_actuators()
+
+        actuator_manager.initialize_actuators()
+        sensor_manager.initialize_sensors()
+
+        actuators_list = actuator_manager.get_actuators_ids()
+
+        if not actuators_list:
+            log_system("[MAIN] No actuators discovered. Event detection and logging still executing")
+
+        policy = StereotipyActivationPolicy(actuator_ids=actuators_list)
+
+        yolo_thread = YoloDpuThread()
+        movenet_thread = MoveNetDpuThread()
+
+        dispatcher = EventDispatcher(
+            actuator_manager=actuator_manager,
+            policy=policy,
+            yolo_thread=yolo_thread,
+            movenet_thread=movenet_thread,
+        )
+
         yolo_thread.start()
-    except Exception as e:
-        log_system(f"[MAIN] Failed to start runtime threads: {e}", level="ERROR")
-        dispatcher.stop()
-        yolo_thread.stop()
-        sensor_manager.stop_all()
-        actuator_manager.stop_all()
-        return
+        movenet_thread.start()
+        dispatcher.start()
 
+        log_system("[MAIN] System is now running. Press Ctrl+C or q to terminate.")
 
-    log_system("[MAIN] System is now running. Press Ctrl+C to terminate.")
-
-    try:
         while True:
-            time.sleep(1)
+            dashboard.render(yolo_thread, movenet_thread)
+
+            key = dashboard.wait_key(1)
+
+            if key == ord("q"):
+                log_system("[MAIN] GUI quit requested.")
+                break
+
+            time.sleep(0.01)
+
     except KeyboardInterrupt:
         log_system("[MAIN] Termination signal received.")
+
     except Exception as e:
         log_system(f"[MAIN] Unhandled error in main loop: {e}", level="ERROR")
+
     finally:
-        dispatcher.stop()
-        yolo_thread.stop()
-        sensor_manager.stop_all()
-        actuator_manager.stop_all()
+        if dispatcher:
+            dispatcher.stop()
+
+        if yolo_thread:
+            yolo_thread.stop()
+
+        if movenet_thread:
+            movenet_thread.stop()
+
+        if sensor_manager:
+            sensor_manager.stop_all()
+
+        if actuator_manager:
+            actuator_manager.stop_all()
+
         log_system("[MAIN] System shutdown complete.")
+
+        if dashboard:
+            unregister_dashboard_console()
+            dashboard.close()
 
 
 if __name__ == "__main__":
