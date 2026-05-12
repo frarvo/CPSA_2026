@@ -1,10 +1,6 @@
 # event_dispatcher.py
 # Dispatches recognized sensor events to the activation policy
 # and triggers actions through the ActuatorManager
-#
-# Author: Francesco Urru
-# Repository: https://github.com/frarvo/CPSA_2026
-# License: MIT
 
 import queue
 import threading
@@ -26,21 +22,24 @@ ACTUATION_COOLDOWN = 5
 
 class EventDispatcher:
     """
-    Creates a thread that consumes event queue and dispatches actions via activation policy.
+    Consumes IMU classifier events and dispatches actions via activation policy.
 
-    Important behavior:
-        - Long-running video gates poll the event queue while active.
-        - If a newer tag arrives while YOLO or MoveNet is running, the active video
-          thread is deactivated and the gate exits.
-        - This mirrors the behavior of yolo_movenet_test.py, where pressing 0 can
-          interrupt the active model immediately.
+    Video behavior:
+        - Video state follows the latest IMU tag.
+        - Video activation is non-blocking.
+        - For tag=1: YOLO stays active while tag remains 1.
+        - For tag=2: YOLO runs first; after person detection, YOLO stops and MoveNet starts.
+        - YOLO and MoveNet are never active together.
+        - For tag=0 or tag=3: all video threads stop.
     """
 
     def __init__(self, actuator_manager, policy, yolo_thread=None, movenet_thread=None):
         self.actuator_manager = actuator_manager
         self.policy = policy
+
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._process_events, daemon=True)
+
         self._last_tag = None
         self._last_actuation_time = None
 
@@ -51,13 +50,15 @@ class EventDispatcher:
         self.yolo_thread = yolo_thread
         self.movenet_thread = movenet_thread
 
+        # None | "yolo_tag1" | "yolo_tag2" | "movenet_tag2"
+        self._video_stage = None
+
     def start(self):
         self._thread.start()
         log_system("[Dispatcher] Started.")
 
     def stop(self):
         self._stop_event.set()
-
         self._stop_video_threads()
 
         if self._thread.is_alive():
@@ -73,58 +74,6 @@ class EventDispatcher:
     def _get_latest_tag(self):
         with self._latest_tag_lock:
             return self._latest_tag
-
-    def _tag_changed_during_video_gate(self, expected_tag):
-        latest_tag = self._get_latest_tag()
-        return latest_tag is not None and latest_tag != expected_tag
-
-    def _poll_pending_tag_change(self):
-        """
-        Drain pending sensor events while a video gate is running.
-
-        The dispatcher normally cannot read new events while it is blocked inside
-        YOLO/MoveNet confirmation. This method lets the video gate observe the
-        newest tag and interrupt itself if the tag changed.
-
-        This intentionally keeps only the latest queued event during a video gate.
-        For this application, the video threads are controlled by current tag state,
-        not by every intermediate duplicate event.
-        """
-        q = get_event_queue()
-        latest_event = None
-        latest_tag = None
-
-        while True:
-            try:
-                event = q.get_nowait()
-            except queue.Empty:
-                break
-
-            try:
-                raw_tag = event.get("stereotipy_tag", "")
-
-                try:
-                    tag = int(raw_tag)
-                except Exception:
-                    tag = None
-
-                latest_event = event
-                latest_tag = tag
-
-            finally:
-                try:
-                    q.task_done()
-                except Exception:
-                    pass
-
-        if latest_event is not None:
-            self._set_latest_tag(latest_tag, latest_event)
-            log_system(
-                f"[Dispatcher] Pending event observed during video gate: tag={latest_tag}",
-                level="INFO",
-            )
-
-        return latest_tag
 
     def _wait_thread_idle(self, thread, name, timeout_sec=5.0):
         if thread is None:
@@ -159,164 +108,101 @@ class EventDispatcher:
             self.movenet_thread.deactivate()
             self._wait_thread_idle(self.movenet_thread, "MoveNet")
 
-    def _run_yolo_person_gate(self, expected_tag, timeout_sec=30.0):
-        if self.yolo_thread is None:
-            log_system(
-                "[Dispatcher] No YOLO thread configured. Person gate bypassed.",
-                level="WARNING",
-            )
-            return True
+        self._video_stage = None
 
-        log_system("[Dispatcher] Starting YOLO person gate.", level="INFO")
-
+    def _activate_yolo(self, stage):
         if self.movenet_thread and self.movenet_thread.is_active():
+            log_system("[Dispatcher] Stopping MoveNet before activating YOLO.", level="INFO")
             self.movenet_thread.deactivate()
             self._wait_thread_idle(self.movenet_thread, "MoveNet")
 
-        self.yolo_thread.activate()
+        if self.yolo_thread is None:
+            log_system("[Dispatcher] YOLO thread not configured.", level="WARNING")
+            self._video_stage = None
+            return
 
-        start = time.monotonic()
+        if not self.yolo_thread.is_active():
+            log_system(f"[Dispatcher] Activating YOLO. stage={stage}", level="INFO")
+            self.yolo_thread.activate()
 
-        while not self._stop_event.is_set():
-            self._poll_pending_tag_change()
+        self._video_stage = stage
 
-            if self._tag_changed_during_video_gate(expected_tag):
-                log_system(
-                    f"[Dispatcher] YOLO gate interrupted: tag changed from {expected_tag} "
-                    f"to {self._get_latest_tag()}",
-                    level="INFO",
-                )
-                self.yolo_thread.deactivate()
-                self._wait_thread_idle(self.yolo_thread, "YOLO")
-                return False
-
-            if not self.yolo_thread.is_active() and getattr(self.yolo_thread, "phase", None) == "idle":
-                log_system(
-                    "[Dispatcher] YOLO became idle before person gate passed.",
-                    level="INFO",
-                )
-                return False
-
-            person_detected, _ = self.yolo_thread.get_latest_result()
-
-            if person_detected is True:
-                log_system("[Dispatcher] YOLO person gate passed.", level="INFO")
-                return True
-
-            if time.monotonic() - start >= timeout_sec:
-                log_system(
-                    "[Dispatcher] YOLO person gate failed: no person detected.",
-                    level="INFO",
-                )
-                self.yolo_thread.deactivate()
-                self._wait_thread_idle(self.yolo_thread, "YOLO")
-                return False
-
-            time.sleep(0.05)
-
-        self.yolo_thread.deactivate()
-        self._wait_thread_idle(self.yolo_thread, "YOLO")
-        return False
-
-    def _run_movenet_confirmation(self, expected_tag, timeout_sec=30.0):
-        if self.movenet_thread is None:
-            log_system(
-                "[Dispatcher] No MoveNet thread configured. MoveNet confirmation bypassed.",
-                level="WARNING",
-            )
-            return True
-
-        log_system("[Dispatcher] Starting MoveNet confirmation.", level="INFO")
-
+    def _activate_movenet(self, stage):
         if self.yolo_thread and self.yolo_thread.is_active():
+            log_system("[Dispatcher] Stopping YOLO before activating MoveNet.", level="INFO")
             self.yolo_thread.deactivate()
             self._wait_thread_idle(self.yolo_thread, "YOLO")
 
-        self.movenet_thread.activate()
+        if self.movenet_thread is None:
+            log_system("[Dispatcher] MoveNet thread not configured.", level="WARNING")
+            self._video_stage = None
+            return
 
-        start = time.monotonic()
+        if not self.movenet_thread.is_active():
+            log_system(f"[Dispatcher] Activating MoveNet. stage={stage}", level="INFO")
+            self.movenet_thread.activate()
 
-        while not self._stop_event.is_set():
-            self._poll_pending_tag_change()
+        self._video_stage = stage
 
-            if self._tag_changed_during_video_gate(expected_tag):
-                log_system(
-                    f"[Dispatcher] MoveNet confirmation interrupted: tag changed from {expected_tag} "
-                    f"to {self._get_latest_tag()}",
-                    level="INFO",
-                )
-                self.movenet_thread.deactivate()
-                self._wait_thread_idle(self.movenet_thread, "MoveNet")
-                return False
+    def _apply_video_state_for_tag(self, tag):
+        """
+        Non-blocking video state update.
 
-            if not self.movenet_thread.is_active() and getattr(self.movenet_thread, "phase", None) == "idle":
-                log_system(
-                    "[Dispatcher] MoveNet became idle before confirmation passed.",
-                    level="INFO",
-                )
-                return False
+        tag 0: stop video
+        tag 1: YOLO only while tag remains 1
+        tag 2: YOLO first; when person detected, switch to MoveNet
+        tag 3: stop video
+        """
 
-            keypoints, _ = self.movenet_thread.get_latest_result()
-
-            if keypoints is not None:
-                log_system("[Dispatcher] MoveNet confirmation passed.", level="INFO")
-                return True
-
-            if time.monotonic() - start >= timeout_sec:
-                log_system("[Dispatcher] MoveNet confirmation timeout.", level="INFO")
-                self.movenet_thread.deactivate()
-                self._wait_thread_idle(self.movenet_thread, "MoveNet")
-                return False
-
-            time.sleep(0.05)
-
-        self.movenet_thread.deactivate()
-        self._wait_thread_idle(self.movenet_thread, "MoveNet")
-        return False
-
-    def _run_video_gate_for_new_tag(self, tag):
         if tag == 1:
-            return self._run_yolo_person_gate(
-                expected_tag=tag,
-                timeout_sec=30.0,
-            )
+            if self._video_stage != "yolo_tag1":
+                self._activate_yolo("yolo_tag1")
+            return
 
         if tag == 2:
-            yolo_ok = self._run_yolo_person_gate(
-                expected_tag=tag,
-                timeout_sec=30.0,
-            )
+            if self._video_stage is None or self._video_stage == "yolo_tag1":
+                self._activate_yolo("yolo_tag2")
+                return
 
-            if not yolo_ok:
-                return False
+            if self._video_stage == "yolo_tag2":
+                if self.yolo_thread is None:
+                    return
 
-            return self._run_movenet_confirmation(
-                expected_tag=tag,
-                timeout_sec=30.0,
-            )
+                person_detected, _ = self.yolo_thread.get_latest_result()
+
+                if person_detected is True:
+                    log_system(
+                        "[Dispatcher] YOLO person detected for tag=2. Switching to MoveNet.",
+                        level="INFO",
+                    )
+                    self._activate_movenet("movenet_tag2")
+
+                return
+
+            if self._video_stage == "movenet_tag2":
+                if self.movenet_thread is None:
+                    return
+
+                if not self.movenet_thread.is_active():
+                    self._activate_movenet("movenet_tag2")
+
+                return
 
         self._stop_video_threads()
-        return True
-
-    def _check_video_for_same_tag_retry(self, tag):
-        if tag == 1:
-            if self.yolo_thread is None:
-                return True
-
-            person_detected, _ = self.yolo_thread.get_latest_result()
-            return person_detected is True
-
-        if tag == 2:
-            if self.movenet_thread is None:
-                return True
-
-            keypoints, _ = self.movenet_thread.get_latest_result()
-            return keypoints is not None
-
-        return True
 
     def _trigger_policy_action(self, event):
+        log_system(
+            f"[Dispatcher POLICY IN] tag={event.get('stereotipy_tag')} "
+            f"source={event.get('source')}",
+            level="INFO",
+        )
+
         result = self.policy.handle(event)
+
+        log_system(
+            f"[Dispatcher POLICY OUT] result={result}",
+            level="INFO",
+        )
 
         if not result:
             log_system("[Dispatcher] Policy returned no action.")
@@ -327,6 +213,30 @@ class EventDispatcher:
             action_type="stereotipy_event",
             **result["params"],
         )
+
+        return result
+
+    def _should_trigger_policy(self, tag, now_time):
+        if tag not in (1, 2):
+            return False
+
+        return (
+            self._last_actuation_time is None
+            or (now_time - self._last_actuation_time) >= ACTUATION_COOLDOWN
+        )
+
+    def _process_policy_for_event(self, event, tag, now_time):
+        if not self._should_trigger_policy(tag, now_time):
+            return None
+
+        try:
+            result = self._trigger_policy_action(event)
+        except Exception as e:
+            log_system(f"[Dispatcher] Trigger error: {e}", level="ERROR")
+            return None
+
+        if result:
+            self._last_actuation_time = now_time
 
         return result
 
@@ -351,38 +261,40 @@ class EventDispatcher:
                 now_time = time.monotonic()
 
                 self._set_latest_tag(tag, event)
+
                 log_system(
-                    f"[Dispatcher] Event received: raw_tag={raw_tag}, tag={tag}, "
-                    f"last_tag={self._last_tag}",
+                    f"[Dispatcher IN] raw_tag={raw_tag}, tag={tag}, "
+                    f"label={label}, last_tag={self._last_tag}, "
+                    f"video_stage={self._video_stage}, "
+                    f"queue_size={q.qsize() if hasattr(q, 'qsize') else 'unknown'}",
                     level="INFO",
                 )
 
-                if tag != self._last_tag:
-                    actuations = []
+                tag_changed = tag != self._last_tag
 
-                    video_ok = self._run_video_gate_for_new_tag(tag)
+                if tag_changed:
+                    log_system(
+                        f"[Dispatcher] Tag changed: {self._last_tag} -> {tag} ({label})",
+                        level="INFO",
+                    )
 
-                    if video_ok:
-                        try:
-                            result = self._trigger_policy_action(event)
-                        except Exception as e:
-                            log_system(f"[Dispatcher] Trigger error: {e}", level="ERROR")
-                            result = None
-                    else:
-                        result = None
-                        log_system("[Dispatcher] Actuation blocked by video gate.")
+                    self._last_tag = tag
+                    self._last_actuation_time = None
 
-                    if result:
-                        actuations = [
-                            {
-                                "target": result["actuator_id"],
-                                "params": result["params"],
-                            }
-                        ]
-                        self._last_actuation_time = now_time
-                    else:
-                        self._last_actuation_time = None
+                self._apply_video_state_for_tag(tag)
 
+                result = self._process_policy_for_event(event, tag, now_time)
+
+                actuations = []
+                if result:
+                    actuations = [
+                        {
+                            "target": result["actuator_id"],
+                            "params": result["params"],
+                        }
+                    ]
+
+                if tag_changed:
                     log_event(
                         timestamp=event.get("timestamp"),
                         feature_type="imu",
@@ -390,39 +302,6 @@ class EventDispatcher:
                         actuations=actuations,
                         source=event.get("source", "dual_wrist"),
                     )
-
-                    # If the video gate was interrupted by a newer tag, keep the
-                    # dispatcher's last tag aligned with the newest observed state.
-                    self._last_tag = self._get_latest_tag()
-
-                else:
-                    if tag in (1, 2):
-                        should_retry = (
-                            self._last_actuation_time is None
-                            or (now_time - self._last_actuation_time) >= ACTUATION_COOLDOWN
-                        )
-
-                        if should_retry:
-                            video_ok = self._check_video_for_same_tag_retry(tag)
-
-                            if video_ok:
-                                try:
-                                    result = self._trigger_policy_action(event)
-                                except Exception as e:
-                                    log_system(
-                                        f"[Dispatcher] Trigger retry error: {e}",
-                                        level="ERROR",
-                                    )
-                                    result = None
-                            else:
-                                result = None
-                                log_system(
-                                    "[Dispatcher] Actuation retry blocked by video gate."
-                                )
-                                self._last_actuation_time = now_time
-
-                            if result:
-                                self._last_actuation_time = now_time
 
             except Exception as e:
                 log_system(f"[Dispatcher] Dispatch error: {e}", level="ERROR")
