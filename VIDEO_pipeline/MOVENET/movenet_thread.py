@@ -35,6 +35,27 @@ SKELETON = [
     (8, 10),
 ]
 
+ROI_MAX_AGE_SEC = 1.0
+
+# When using a YOLO bbox, expand it before cropping.
+# The bbox can be slightly stale because YOLO and MoveNet do not run on the same frame.
+YOLO_ROI_MARGIN_X = 0.25
+YOLO_ROI_MARGIN_Y = 0.35
+
+# minimum keypoint score used to build a new ROI
+MOVENET_ROI_MIN_SCORE = 0.25
+# minimum number of visible upper-body keypoints needed
+MOVENET_ROI_MIN_KEYPOINTS = 3
+
+# expansion applied to the bbox generated from keypoints
+MOVENET_ROI_MARGIN_X = 0.60
+MOVENET_ROI_MARGIN_Y = 0.80
+
+# below this average score, consider MoveNet tracking unreliable
+MOVENET_REACQUIRE_SCORE = 0.20
+# number of consecutive weak frames before asking YOLO to reacquire
+MOVENET_REACQUIRE_BAD_FRAMES = 3
+
 
 # ---------------------------------------------------------
 # UTILITIES
@@ -93,32 +114,175 @@ def center_crop_square(frame):
     return cropped
 
 
-def preprocess(frame, input_shape, input_tensor):
+# ---------------------------------------------------------
+# IMAGE PROCESSING
+# ---------------------------------------------------------
+
+def clamp_bbox_xyxy(x1, y1, x2, y2, img_w, img_h):
+    x1 = max(0, min(img_w - 1, int(x1)))
+    y1 = max(0, min(img_h - 1, int(y1)))
+    x2 = max(0, min(img_w, int(x2)))
+    y2 = max(0, min(img_h, int(y2)))
+
+    if x2 <= x1 or y2 <= y1:
+        return None
+
+    return x1, y1, x2, y2
+
+
+def expand_bbox_xyxy(
+    bbox_xyxy,
+    img_w,
+    img_h,
+    margin_x=0.25,
+    margin_y=0.35
+):
+    if bbox_xyxy is None:
+        return None
+
+    x1, y1, x2, y2 = bbox_xyxy
+
+    w = x2 - x1
+    h = y2 - y1
+
+    if w <= 0 or h <= 0:
+        return None
+
+    dx = int(w * margin_x)
+    dy = int(h * margin_y)
+
+    return clamp_bbox_xyxy(
+        x1 - dx,
+        y1 - dy,
+        x2 + dx,
+        y2 + dy,
+        img_w,
+        img_h
+    )
+
+
+def letterbox_image(image, target_w, target_h, color=(0, 0, 0)):
+    """
+    Resize image with unchanged aspect ratio using padding.
+
+    Returns:
+        out:
+            Letterboxed image of shape target_h x target_w x C.
+
+        scale:
+            Resize scale from original crop to resized crop.
+
+        pad_left:
+            Horizontal padding on the left.
+
+        pad_top:
+            Vertical padding on the top.
+    """
+    h, w = image.shape[:2]
+
+    scale = min(target_w / float(w), target_h / float(h))
+
+    new_w = int(round(w * scale))
+    new_h = int(round(h * scale))
+
+    resized = cv2.resize(
+        image,
+        (new_w, new_h),
+        interpolation=cv2.INTER_LINEAR
+    )
+
+    pad_w = target_w - new_w
+    pad_h = target_h - new_h
+
+    pad_left = pad_w // 2
+    pad_right = pad_w - pad_left
+    pad_top = pad_h // 2
+    pad_bottom = pad_h - pad_top
+
+    out = cv2.copyMakeBorder(
+        resized,
+        pad_top,
+        pad_bottom,
+        pad_left,
+        pad_right,
+        cv2.BORDER_CONSTANT,
+        value=color
+    )
+
+    return out, scale, pad_left, pad_top
+
+
+def preprocess(frame, input_shape, input_tensor, roi_bbox=None):
     """
     MoveNet input:
-        192x192 RGB int8
+        192x192 RGB int8 or float, depending on xmodel input tensor.
+
+    New behavior:
+        - if roi_bbox is available, crop the frame around the ROI
+        - otherwise, use the full frame
+        - letterbox the crop/full frame to the model input size
+        - return transform metadata for decoding keypoints back to full-frame coordinates
     """
     target_h, target_w = input_shape[1], input_shape[2]
+    img_h, img_w = frame.shape[:2]
 
-    cropped = center_crop_square(frame)
+    if roi_bbox is not None:
+        expanded = expand_bbox_xyxy(
+            roi_bbox,
+            img_w,
+            img_h,
+            margin_x=YOLO_ROI_MARGIN_X,
+            margin_y=YOLO_ROI_MARGIN_Y
+        )
+    else:
+        expanded = None
 
-    image = cv2.resize(cropped, (target_w, target_h))
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    if expanded is None:
+        # Fallback: use the full frame, but still letterbox.
+        crop_x1, crop_y1, crop_x2, crop_y2 = 0, 0, img_w, img_h
+        crop_source = "full_frame"
+    else:
+        crop_x1, crop_y1, crop_x2, crop_y2 = expanded
+        crop_source = "roi"
+
+    crop = frame[crop_y1:crop_y2, crop_x1:crop_x2]
+
+    letterboxed, scale, pad_left, pad_top = letterbox_image(
+        crop,
+        target_w,
+        target_h
+    )
+
+    image = cv2.cvtColor(letterboxed, cv2.COLOR_BGR2RGB)
 
     fix_point = get_fix_point(input_tensor)
 
     if fix_point is not None:
-        scale = 2 ** fix_point
+        quant_scale = 2 ** fix_point
 
         image = image.astype(np.float32) / 255.0
-        image = image * scale
+        image = image * quant_scale
         image = np.clip(image, -128, 127).astype(np.int8)
 
     else:
         image = image.astype(np.float32) / 255.0
 
-    return np.ascontiguousarray(image.reshape(input_shape))
+    transform = {
+        "crop_source": crop_source,
+        "crop_x1": crop_x1,
+        "crop_y1": crop_y1,
+        "crop_x2": crop_x2,
+        "crop_y2": crop_y2,
+        "crop_w": crop_x2 - crop_x1,
+        "crop_h": crop_y2 - crop_y1,
+        "scale": scale,
+        "pad_left": pad_left,
+        "pad_top": pad_top,
+        "target_w": target_w,
+        "target_h": target_h,
+    }
 
+    return np.ascontiguousarray(image.reshape(input_shape)), crop.copy(), transform
 
 # ---------------------------------------------------------
 # KEYPOINT DECODING
@@ -127,7 +291,8 @@ def preprocess(frame, input_shape, input_tensor):
 def decode_keypoints(
     heatmaps,
     offsets,
-    display_shape,
+    transform,
+    frame_shape,
     score_threshold=0.10
 ):
     """
@@ -137,13 +302,18 @@ def decode_keypoints(
         heatmaps : (1, 48, 48, 17)
         offsets  : (1, 48, 48, 34)
 
-    Coordinates are returned in display_shape coordinates,
-    not 192x192 model coordinates.
+    Coordinates are returned in full-frame coordinates.
     """
-    H, W = display_shape[:2]
+    frame_h, frame_w = frame_shape[:2]
 
     heatmaps = heatmaps[0]
     offsets = offsets[0]
+
+    crop_x1 = transform["crop_x1"]
+    crop_y1 = transform["crop_y1"]
+    scale = transform["scale"]
+    pad_left = transform["pad_left"]
+    pad_top = transform["pad_top"]
 
     keypoints = []
 
@@ -164,11 +334,20 @@ def decode_keypoints(
         y_192 = y_cell * 4.0 + y_offset
         x_192 = x_cell * 4.0 + x_offset
 
-        x = int((x_192 / 192.0) * W)
-        y = int((y_192 / 192.0) * H)
+        # Undo letterbox:
+        # model coordinates -> crop coordinates
+        x_crop = (x_192 - pad_left) / scale
+        y_crop = (y_192 - pad_top) / scale
 
-        x = max(0, min(W - 1, x))
-        y = max(0, min(H - 1, y))
+        # Crop coordinates -> full-frame coordinates
+        x_full = x_crop + crop_x1
+        y_full = y_crop + crop_y1
+
+        x = int(round(x_full))
+        y = int(round(y_full))
+
+        x = max(0, min(frame_w - 1, x))
+        y = max(0, min(frame_h - 1, y))
 
         keypoints.append({
             "id": keypoint_id,
@@ -180,8 +359,6 @@ def decode_keypoints(
         })
 
     return keypoints
-
-
 # ---------------------------------------------------------
 # DISTANCE / NORMALIZED FACE PROXIMITY CHECK
 # ---------------------------------------------------------
@@ -198,6 +375,86 @@ def distance_between(a, b):
     dy = float(a["y"] - b["y"])
     return float(np.sqrt(dx * dx + dy * dy))
 
+def upper_body_score(keypoints):
+    """
+    Average score over visible upper-body keypoints.
+
+    Uses the same upper-body IDs already relevant for the wrist-to-face task.
+    """
+    if not keypoints:
+        return 0.0
+
+    valid_scores = [
+        float(kp["score"])
+        for kp in keypoints
+        if kp["id"] in VALID_KEYPOINT_IDS and kp["visible"]
+    ]
+
+    if not valid_scores:
+        return 0.0
+
+    return float(np.mean(valid_scores))
+
+
+def bbox_from_keypoints(
+    keypoints,
+    frame_shape,
+    min_score=MOVENET_ROI_MIN_SCORE,
+    min_keypoints=MOVENET_ROI_MIN_KEYPOINTS
+):
+    """
+    Build a full-frame xyxy ROI from confident MoveNet upper-body keypoints.
+
+    Returns:
+        bbox_xyxy, confidence
+
+        bbox_xyxy:
+            (x1, y1, x2, y2) in full-frame coordinates,
+            or None if not enough reliable keypoints exist.
+
+        confidence:
+            average score of the keypoints used to build the bbox.
+    """
+    frame_h, frame_w = frame_shape[:2]
+
+    valid = [
+        kp for kp in keypoints
+        if (
+            kp["id"] in VALID_KEYPOINT_IDS
+            and kp["visible"]
+            and float(kp["score"]) >= min_score
+        )
+    ]
+
+    if len(valid) < min_keypoints:
+        return None, 0.0
+
+    xs = np.array([kp["x"] for kp in valid], dtype=np.float32)
+    ys = np.array([kp["y"] for kp in valid], dtype=np.float32)
+    scores = np.array([kp["score"] for kp in valid], dtype=np.float32)
+
+    x1 = float(xs.min())
+    y1 = float(ys.min())
+    x2 = float(xs.max())
+    y2 = float(ys.max())
+
+    if x2 <= x1 or y2 <= y1:
+        return None, 0.0
+
+    bbox = expand_bbox_xyxy(
+        (x1, y1, x2, y2),
+        frame_w,
+        frame_h,
+        margin_x=MOVENET_ROI_MARGIN_X,
+        margin_y=MOVENET_ROI_MARGIN_Y
+    )
+
+    if bbox is None:
+        return None, 0.0
+
+    confidence = float(scores.mean())
+
+    return bbox, confidence
 
 def normalized_wrist_to_face_status(
     keypoints,
@@ -339,7 +596,8 @@ class MoveNetDpuThread(threading.Thread):
         self,
         device_id: str = "camera0",
         camera_index: int = 0,
-        debug_window: bool = False
+        debug_window: bool = False,
+        roi_state=None
     ):
         super().__init__(daemon=True)
 
@@ -363,6 +621,10 @@ class MoveNetDpuThread(threading.Thread):
         self.latest_distances = {}
         self.latest_ratios = {}
 
+        self.movenet_bad_roi_frames = 0
+
+        self.roi_state = roi_state
+
         # Used by wait_idle() in your dashboard test.
         self.phase = "idle"
 
@@ -373,6 +635,7 @@ class MoveNetDpuThread(threading.Thread):
 
     def deactivate(self):
         self.active_event.clear()
+        self.movenet_bad_roi_frames = 0
 
         with self.result_lock:
             self.latest_keypoints = None
@@ -508,12 +771,21 @@ class MoveNetDpuThread(threading.Thread):
                         print("[MoveNetDpuThread] Failed to read frame")
                         break
 
+                    # Keep MoveNet and YOLO in the same mirrored camera coordinate system.
                     frame = cv2.flip(frame, 1)
 
-                    img_input = preprocess(
+                    roi_bbox = None
+
+                    if self.roi_state is not None:
+                        roi_bbox = self.roi_state.get_valid_roi(
+                            max_age_sec=ROI_MAX_AGE_SEC
+                        )
+
+                    img_input, crop_view, transform = preprocess(
                         frame,
                         input_shape,
-                        input_tensor
+                        input_tensor,
+                        roi_bbox=roi_bbox
                     )
 
                     job_id = self.runner.execute_async(
@@ -533,12 +805,12 @@ class MoveNetDpuThread(threading.Thread):
                         output_tensors[2]
                     )
 
-                    cropped_view = center_crop_square(frame)
 
                     keypoints = decode_keypoints(
                         heatmaps=heatmaps,
                         offsets=offsets,
-                        display_shape=cropped_view.shape,
+                        transform=transform,
+                        frame_shape=frame.shape,
                         score_threshold=0.10
                     )
 
@@ -548,13 +820,66 @@ class MoveNetDpuThread(threading.Thread):
                         require_both_wrists=False
                     )
 
-                    cropped_view = draw_keypoints(
-                        cropped_view,
+                    pose_score = upper_body_score(keypoints)
+
+                    if self.roi_state is not None:
+                        if pose_score < MOVENET_REACQUIRE_SCORE:
+                            self.movenet_bad_roi_frames += 1
+
+                            if self.movenet_bad_roi_frames >= MOVENET_REACQUIRE_BAD_FRAMES:
+                                self.roi_state.mark_reacquire()
+                        else:
+                            self.movenet_bad_roi_frames = 0
+
+                            if not self.roi_state.needs_reacquire():
+                                updated_bbox, updated_conf = bbox_from_keypoints(
+                                    keypoints,
+                                    frame.shape
+                                )
+
+                                if updated_bbox is not None:
+                                    self.roi_state.update_from_movenet(
+                                        bbox_xyxy=updated_bbox,
+                                        confidence=updated_conf
+                                    )
+
+                    debug_view = frame.copy()
+
+                    # Draw the active MoveNet crop region.
+                    cv2.rectangle(
+                        debug_view,
+                        (transform["crop_x1"], transform["crop_y1"]),
+                        (transform["crop_x2"], transform["crop_y2"]),
+                        (0, 255, 0),
+                        2
+                    )
+
+                    cv2.putText(
+                        debug_view,
+                        transform["crop_source"],
+                        (transform["crop_x1"], max(0, transform["crop_y1"] - 8)),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.5,
+                        (0, 255, 0),
+                        1
+                    )
+                    cv2.putText(
+                        debug_view,
+                        f"pose_score={pose_score:.2f}",
+                        (10, 24),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        (0, 255, 255),
+                        2
+                    )
+
+                    debug_view = draw_keypoints(
+                        debug_view,
                         keypoints
                     )
 
                     model_view = cv2.resize(
-                        cropped_view,
+                        debug_view,
                         (display_w, display_h),
                         interpolation=cv2.INTER_NEAREST
                     )

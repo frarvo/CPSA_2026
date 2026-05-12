@@ -10,6 +10,7 @@ from core.event_dispatcher import EventDispatcher
 
 from VIDEO_pipeline.YOLO.yolo_thread import YoloDpuThread
 from VIDEO_pipeline.MOVENET.movenet_thread import MoveNetDpuThread
+from VIDEO_pipeline.shared.person_roi_state import PersonRoiState
 
 from utils.logger import log_system
 from utils.config import get_bluecoin_config
@@ -96,14 +97,17 @@ def main():
 
         policy = StereotipyActivationPolicy(actuator_ids=actuators_list)
 
-        yolo_thread = YoloDpuThread()
-        movenet_thread = MoveNetDpuThread()
+        roi_state = PersonRoiState()
+
+        yolo_thread = YoloDpuThread(roi_state=roi_state)
+        movenet_thread = MoveNetDpuThread(roi_state=roi_state)
 
         dispatcher = EventDispatcher(
             actuator_manager=actuator_manager,
             policy=policy,
             yolo_thread=yolo_thread,
             movenet_thread=movenet_thread,
+            roi_state=roi_state,
         )
 
         yolo_thread.start()

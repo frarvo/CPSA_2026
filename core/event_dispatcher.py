@@ -18,7 +18,12 @@ LABELS = {
 }
 
 ACTUATION_COOLDOWN = 5
-
+# When YOLO is reacquiring, only switch back to MoveNet if the latest YOLO bbox is at most YOLO_REFRESH_MAX_AGE_SEC old.
+YOLO_REFRESH_MAX_AGE_SEC = 1.0
+# YOLO_REACQUIRE_MIN_INTERVAL_SEC: Do not request YOLO reacquisition more often than once every YOLO_REACQUIRE_MIN_INTERVAL_SEC 
+YOLO_REACQUIRE_MIN_INTERVAL_SEC = 2.0
+# YOLO_REACQUIRE_TIMEOUT_SEC: If YOLO cannot reacquire a person after YOLO_REACQUIRE_TIMEOUT_SEC, stop the video stage.
+YOLO_REACQUIRE_TIMEOUT_SEC = 5.0
 
 class EventDispatcher:
     """
@@ -33,9 +38,17 @@ class EventDispatcher:
         - For tag=0 or tag=3: all video threads stop.
     """
 
-    def __init__(self, actuator_manager, policy, yolo_thread=None, movenet_thread=None):
+    def __init__(
+            self,
+            actuator_manager,
+            policy,
+            yolo_thread=None,
+            movenet_thread=None,
+            roi_state=None,
+        ):
         self.actuator_manager = actuator_manager
         self.policy = policy
+        self.roi_state = roi_state
 
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._process_events, daemon=True)
@@ -52,6 +65,9 @@ class EventDispatcher:
 
         # None | "yolo_tag1" | "yolo_tag2" | "movenet_tag2"
         self._video_stage = None
+
+        self._last_yolo_reacquire_request_ts = None
+        self._yolo_tag2_started_ts = None
 
     def start(self):
         self._thread.start()
@@ -109,6 +125,10 @@ class EventDispatcher:
             self._wait_thread_idle(self.movenet_thread, "MoveNet")
 
         self._video_stage = None
+        self._yolo_tag2_started_ts = None
+
+        if self.roi_state is not None:
+            self.roi_state.clear()
 
     def _activate_yolo(self, stage):
         if self.movenet_thread and self.movenet_thread.is_active():
@@ -121,11 +141,16 @@ class EventDispatcher:
             self._video_stage = None
             return
 
+        previous_stage = self._video_stage
+
         if not self.yolo_thread.is_active():
             log_system(f"[Dispatcher] Activating YOLO. stage={stage}", level="INFO")
             self.yolo_thread.activate()
 
         self._video_stage = stage
+
+        if stage == "yolo_tag2" and previous_stage != "yolo_tag2":
+            self._yolo_tag2_started_ts = time.monotonic()
 
     def _activate_movenet(self, stage):
         if self.yolo_thread and self.yolo_thread.is_active():
@@ -143,6 +168,9 @@ class EventDispatcher:
             self.movenet_thread.activate()
 
         self._video_stage = stage
+
+        if stage == "movenet_tag2":
+            self._yolo_tag2_started_ts = None
 
     def _apply_video_state_for_tag(self, tag):
         """
@@ -168,19 +196,59 @@ class EventDispatcher:
                 if self.yolo_thread is None:
                     return
 
-                person_detected, _ = self.yolo_thread.get_latest_result()
+                person_bbox, person_conf, person_bbox_ts = (
+                    self.yolo_thread.get_latest_person_bbox()
+                )
+                bbox_is_fresh = (
+                    person_bbox is not None
+                    and person_bbox_ts is not None
+                    and (time.monotonic() - person_bbox_ts) <= YOLO_REFRESH_MAX_AGE_SEC
+                )
 
-                if person_detected is True:
+                if bbox_is_fresh:
                     log_system(
-                        "[Dispatcher] YOLO person detected for tag=2. Switching to MoveNet.",
+                        f"[Dispatcher] Fresh YOLO person ROI acquired for tag=2. "
+                        f"bbox={person_bbox}, conf={person_conf:.2f}. "
+                        f"Switching to MoveNet.",
                         level="INFO",
                     )
                     self._activate_movenet("movenet_tag2")
+
+                    return
+
+                if self._yolo_tag2_started_ts is not None:
+                    yolo_elapsed = time.monotonic() - self._yolo_tag2_started_ts
+
+                    if yolo_elapsed >= YOLO_REACQUIRE_TIMEOUT_SEC:
+                        log_system(
+                            f"[Dispatcher] YOLO tag=2 reacquisition timed out after "
+                            f"{yolo_elapsed:.1f}s. Stopping video threads.",
+                            level="WARNING",
+                        )
+                        self._stop_video_threads()
 
                 return
 
             if self._video_stage == "movenet_tag2":
                 if self.movenet_thread is None:
+                    return
+
+                if self.roi_state is not None and self.roi_state.needs_reacquire():
+                    now = time.monotonic()
+
+                    if (
+                        self._last_yolo_reacquire_request_ts is not None
+                        and now - self._last_yolo_reacquire_request_ts < YOLO_REACQUIRE_MIN_INTERVAL_SEC
+                    ):
+                        return
+
+                    self._last_yolo_reacquire_request_ts = now
+
+                    log_system(
+                        "[Dispatcher] MoveNet requested ROI reacquisition. Switching back to YOLO.",
+                        level="INFO",
+                    )
+                    self._activate_yolo("yolo_tag2")
                     return
 
                 if not self.movenet_thread.is_active():
@@ -247,6 +315,11 @@ class EventDispatcher:
             try:
                 event = q.get(timeout=0.5)
             except queue.Empty:
+                latest_tag = self._get_latest_tag()
+
+                if latest_tag is not None:
+                    self._apply_video_state_for_tag(latest_tag)
+
                 continue
 
             try:

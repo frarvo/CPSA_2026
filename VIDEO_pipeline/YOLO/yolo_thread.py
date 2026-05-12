@@ -47,8 +47,19 @@ def postprocess(output, frame, conf_threshold=0.6, nms_threshold=0.4):
 
     Returns:
         tuple:
-            frame: frame with YOLO boxes drawn.
-            person_detected: True if at least one detected class is person.
+            frame:
+                frame with YOLO boxes drawn.
+
+            person_detected:
+                True if at least one detected class is person.
+
+            best_person_bbox:
+                Best person bbox in full-frame xyxy coordinates:
+                    (x1, y1, x2, y2)
+                or None if no person is detected.
+
+            best_person_conf:
+                Confidence of best_person_bbox, or 0.0 if no person is detected.
     """
     H, W = frame.shape[:2]
 
@@ -100,20 +111,34 @@ def postprocess(output, frame, conf_threshold=0.6, nms_threshold=0.4):
     )
 
     person_detected = False
+    best_person_bbox = None
+    best_person_conf = 0.0
 
     if len(indices) > 0:
         for i in indices.flatten():
             x, y, w, h = boxes[i]
             label = CLASS_NAMES[class_ids[i]]
-            conf = confidences[i]
+            conf = float(confidences[i])
+
+            x1 = max(0, int(x))
+            y1 = max(0, int(y))
+            x2 = min(W - 1, int(x + w))
+            y2 = min(H - 1, int(y + h))
+
+            if x2 <= x1 or y2 <= y1:
+                continue
 
             if label == "person":
                 person_detected = True
 
+                if conf > best_person_conf:
+                    best_person_conf = conf
+                    best_person_bbox = (x1, y1, x2, y2)
+
             cv2.rectangle(
                 frame,
-                (x, y),
-                (x + w, y + h),
+                (x1, y1),
+                (x2, y2),
                 (0, 255, 0),
                 2
             )
@@ -121,15 +146,14 @@ def postprocess(output, frame, conf_threshold=0.6, nms_threshold=0.4):
             cv2.putText(
                 frame,
                 f"{label} {conf:.2f}",
-                (x, y - 5),
+                (x1, max(0, y1 - 5)),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.5,
                 (0, 255, 0),
                 1
             )
 
-    return frame, person_detected
-
+    return frame, person_detected, best_person_bbox, best_person_conf
 
 # ------------------- YOLO DPU THREAD ------------------- #
 class YoloDpuThread(threading.Thread):
@@ -145,7 +169,8 @@ class YoloDpuThread(threading.Thread):
         self,
         device_id: str = "camera0",
         camera_index: int = 0,
-        debug_window: bool = False
+        debug_window: bool = False,
+        roi_state=None
     ):
         """
         Initialize the YOLO DPU camera thread.
@@ -173,8 +198,14 @@ class YoloDpuThread(threading.Thread):
         self.latest_result_ts = None
         self.latest_frame = None
 
+        self.latest_person_bbox = None
+        self.latest_person_conf = 0.0
+        self.latest_person_bbox_ts = None
+
         self.no_person_timeout_sec = 5.0
         self._last_person_seen_ts = None
+
+        self.roi_state = roi_state
 
         # Used by the external test harness wait_idle().
         self.phase = "idle"
@@ -197,6 +228,12 @@ class YoloDpuThread(threading.Thread):
             self.latest_result_ts = None
             self.latest_frame = None
 
+            self.latest_person_bbox = None
+            self.latest_person_conf = 0.0
+            self.latest_person_bbox_ts = None
+
+       
+
     def get_latest_result(self):
         """
         Return the latest person-detection result.
@@ -212,6 +249,30 @@ class YoloDpuThread(threading.Thread):
         """
         with self.result_lock:
             return self.latest_result, self.latest_result_ts
+        
+    def get_latest_person_bbox(self):
+        """
+        Return the latest detected person bbox.
+
+        Returns:
+            tuple:
+                latest_person_bbox:
+                    (x1, y1, x2, y2) in full-frame coordinates,
+                    or None if no current person bbox exists.
+
+                latest_person_conf:
+                    Confidence of the bbox.
+
+                latest_person_bbox_ts:
+                    time.monotonic() timestamp of the bbox,
+                    or None if unavailable.
+        """
+        with self.result_lock:
+            return (
+                self.latest_person_bbox,
+                self.latest_person_conf,
+                self.latest_person_bbox_ts
+            )
 
     def get_latest_frame(self):
         """
@@ -305,12 +366,29 @@ class YoloDpuThread(threading.Thread):
                         log_system("[YoloDpuThread] Failed to read frame", level="WARNING")
                         break
 
+                    # Keep YOLO and MoveNet in the same image coordinate system.
+                    # MoveNet already uses mirrored camera frames.
+                    frame = cv2.flip(frame, 1)
+
                     img_input = preprocess(frame, input_shape)
 
                     job_id = self.runner.execute_async([img_input], output_data)
                     self.runner.wait(job_id)
 
-                    frame, person_detected = postprocess(output_data[0], frame)
+                    frame, person_detected, person_bbox, person_conf = postprocess(
+                        output_data[0],
+                        frame
+                    )
+
+                    if (
+                        self.roi_state is not None
+                        and person_detected
+                        and person_bbox is not None
+                    ):
+                        self.roi_state.update_from_yolo(
+                            bbox_xyxy=person_bbox,
+                            confidence=person_conf
+                        )
 
                     now = time.monotonic()
 
@@ -328,6 +406,15 @@ class YoloDpuThread(threading.Thread):
                         self.latest_result = person_detected
                         self.latest_result_ts = now
                         self.latest_frame = frame.copy()
+
+                        if person_detected and person_bbox is not None:
+                            self.latest_person_bbox = person_bbox
+                            self.latest_person_conf = person_conf
+                            self.latest_person_bbox_ts = now
+                        else:
+                            self.latest_person_bbox = None
+                            self.latest_person_conf = 0.0
+                            self.latest_person_bbox_ts = now
 
                     # Only use this when running YOLO standalone.
                     # Keep debug_window=False when using VideoDashboard.
