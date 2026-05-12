@@ -40,14 +40,14 @@ led_strip:
 
 bluecoins:
   - id: bc_left
-    name: "STOPmeL"
+    name: "CPSA_L2"
   - id: bc_right
-    name: "STOPmeR"
+    name: "CPSA_R2"
 
 # Sensors data stream parameters for sync
 sync:
-  max_skew_ms: 25         # L/R timing alignment tolerance
-  stale_ms: 100           # Drops sets of data from one wrist if it sits too long waiting for the other wrist
+  max_skew_ms: 30         # L/R timing alignment tolerance
+  stale_ms: 50           # Drops sets of data from one wrist if it sits too long waiting for the other wrist
 
 buffer:
   window_size: 150                        # Samples per window
