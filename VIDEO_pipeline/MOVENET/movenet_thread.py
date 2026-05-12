@@ -1,5 +1,3 @@
-# movenet_thread.py
-
 import cv2
 import numpy as np
 import vart
@@ -22,10 +20,11 @@ KEYPOINT_NAMES = [
 ]
 
 VALID_KEYPOINT_IDS = {
-    0, 1, 2, 3, 4,
-    5, 6,
-    7, 8,
-    9, 10
+    0,       # nose
+
+    5, 6,    # shoulders
+    7, 8,    # elbows
+    9, 10    # wrists
 }
 
 SKELETON = [
@@ -137,6 +136,9 @@ def decode_keypoints(
     Expected outputs:
         heatmaps : (1, 48, 48, 17)
         offsets  : (1, 48, 48, 34)
+
+    Coordinates are returned in display_shape coordinates,
+    not 192x192 model coordinates.
     """
     H, W = display_shape[:2]
 
@@ -178,6 +180,94 @@ def decode_keypoints(
         })
 
     return keypoints
+
+
+# ---------------------------------------------------------
+# DISTANCE / NORMALIZED FACE PROXIMITY CHECK
+# ---------------------------------------------------------
+
+NOSE_ID = 0
+LEFT_SHOULDER_ID = 5
+RIGHT_SHOULDER_ID = 6
+LEFT_WRIST_ID = 9
+RIGHT_WRIST_ID = 10
+
+
+def distance_between(a, b):
+    dx = float(a["x"] - b["x"])
+    dy = float(a["y"] - b["y"])
+    return float(np.sqrt(dx * dx + dy * dy))
+
+
+def normalized_wrist_to_face_status(
+    keypoints,
+    threshold_ratio=0.45,
+    require_both_wrists=False
+):
+    """
+    Face proximity check using only the nose as face reference.
+
+    Normalization:
+        wrist_to_nose_distance / shoulder_width
+
+    This makes the threshold less dependent on camera distance.
+
+    Returns:
+        status: True or False
+        distances: raw wrist-to-nose distances in crop pixels
+        ratios: normalized distances
+    """
+    if not keypoints:
+        return False, {}, {}
+
+    points = {kp["id"]: kp for kp in keypoints}
+
+    nose = points.get(NOSE_ID)
+    left_shoulder = points.get(LEFT_SHOULDER_ID)
+    right_shoulder = points.get(RIGHT_SHOULDER_ID)
+    left_wrist = points.get(LEFT_WRIST_ID)
+    right_wrist = points.get(RIGHT_WRIST_ID)
+
+    if nose is None or not nose["visible"]:
+        return False, {}, {}
+
+    if (
+        left_shoulder is None
+        or right_shoulder is None
+        or not left_shoulder["visible"]
+        or not right_shoulder["visible"]
+    ):
+        return False, {}, {}
+
+    shoulder_width = distance_between(left_shoulder, right_shoulder)
+
+    if shoulder_width <= 1.0:
+        return False, {}, {}
+
+    distances = {}
+    ratios = {}
+
+    if left_wrist is not None and left_wrist["visible"]:
+        d = distance_between(left_wrist, nose)
+        distances["left_wrist_to_face"] = d
+        ratios["left_wrist_to_face"] = d / shoulder_width
+
+    if right_wrist is not None and right_wrist["visible"]:
+        d = distance_between(right_wrist, nose)
+        distances["right_wrist_to_face"] = d
+        ratios["right_wrist_to_face"] = d / shoulder_width
+
+    if require_both_wrists:
+        status = (
+            "left_wrist_to_face" in ratios
+            and "right_wrist_to_face" in ratios
+            and ratios["left_wrist_to_face"] <= threshold_ratio
+            and ratios["right_wrist_to_face"] <= threshold_ratio
+        )
+    else:
+        status = any(r <= threshold_ratio for r in ratios.values())
+
+    return status, distances, ratios
 
 
 # ---------------------------------------------------------
@@ -238,6 +328,7 @@ class MoveNetDpuThread(threading.Thread):
         - camera
         - MoveNet DPU inference
         - latest keypoints storage
+        - wrist-to-face proximity status
 
     GUI rule:
         By default, this thread does not create its own OpenCV window.
@@ -268,6 +359,10 @@ class MoveNetDpuThread(threading.Thread):
         self.latest_result_ts = None
         self.latest_frame = None
 
+        self.latest_status = False
+        self.latest_distances = {}
+        self.latest_ratios = {}
+
         # Used by wait_idle() in your dashboard test.
         self.phase = "idle"
 
@@ -283,6 +378,9 @@ class MoveNetDpuThread(threading.Thread):
             self.latest_keypoints = None
             self.latest_result_ts = None
             self.latest_frame = None
+            self.latest_status = False
+            self.latest_distances = {}
+            self.latest_ratios = {}
 
     def is_active(self):
         return self.active_event.is_set()
@@ -297,6 +395,15 @@ class MoveNetDpuThread(threading.Thread):
                 return None
 
             return self.latest_frame.copy()
+
+    def get_latest_status(self):
+        with self.result_lock:
+            return (
+                self.latest_status,
+                self.latest_distances,
+                self.latest_ratios,
+                self.latest_result_ts
+            )
 
     # -----------------------------------------------------
 
@@ -435,6 +542,12 @@ class MoveNetDpuThread(threading.Thread):
                         score_threshold=0.10
                     )
 
+                    status, distances, ratios = normalized_wrist_to_face_status(
+                        keypoints,
+                        threshold_ratio=0.45,
+                        require_both_wrists=False
+                    )
+
                     cropped_view = draw_keypoints(
                         cropped_view,
                         keypoints
@@ -452,6 +565,9 @@ class MoveNetDpuThread(threading.Thread):
                         self.latest_keypoints = keypoints
                         self.latest_result_ts = now
                         self.latest_frame = model_view.copy()
+                        self.latest_status = status
+                        self.latest_distances = distances
+                        self.latest_ratios = ratios
 
                     if self.debug_window:
                         cv2.imshow(
@@ -477,6 +593,9 @@ class MoveNetDpuThread(threading.Thread):
 
                 with self.result_lock:
                     self.latest_frame = None
+                    self.latest_status = False
+                    self.latest_distances = {}
+                    self.latest_ratios = {}
 
                 self.phase = "idle"
 
