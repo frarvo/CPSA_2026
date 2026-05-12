@@ -41,6 +41,7 @@ The current runtime is centered on dual BlueCoin IMU acquisition and a staged vi
 - [Configuration](#configuration)
 - [Running the System](#running-the-system)
 - [IMU Pipeline](#imu-pipeline)
+- [BlueCoin Feature Listeners and Custom Features](#bluecoin-feature-listeners-and-custom-features)
 - [Video Pipeline](#video-pipeline)
 - [Event System](#event-system)
 - [Event Dispatcher](#event-dispatcher)
@@ -50,6 +51,7 @@ The current runtime is centered on dual BlueCoin IMU acquisition and a staged vi
 - [Logging](#logging)
 - [Shutdown](#shutdown)
 - [Bluetooth and BlueST SDK Notes](#bluetooth-and-bluest-sdk-notes)
+- [MetaWear / MetaMotion Notes](#metawear--metamotion-notes)
 - [DPU / Vitis-AI Notes](#dpu--vitis-ai-notes)
 - [Extending the System](#extending-the-system)
 
@@ -379,6 +381,68 @@ Each BlueCoin thread uses feature listeners for:
 - gyroscope,
 - quaternion / MEMS sensor fusion.
 
+
+### BlueCoin Feature Listeners and Custom Features
+
+BlueCoin devices can expose more BLE features than the three currently used by CPSA. The current IMU pipeline uses accelerometer, gyroscope, and MEMS sensor-fusion/quaternion data because those are the signals required by the dual-wrist processing and classifier chain. Other BlueCoin firmware images may expose additional sensors or features, for example audio, environmental signals, activity-recognition outputs, or other custom BlueST protocol features.
+
+The official reference for the Python SDK is:
+
+```text
+https://github.com/STMicroelectronics/BlueSTSDK_Python
+```
+
+In this project, a BlueCoin feature must be represented in two places before it can become useful at runtime. First, the SDK must know how to decode the feature. Standard SDK features can be imported directly from `blue_st_sdk.features`. Missing or project-specific features should be implemented under `sensors/BLE/`, as done for:
+
+```bash
+sensors/BLE/feature_mems_sensor_fusion_compact.py
+```
+
+Second, the project must define a listener for that feature in:
+
+```bash
+sensors/BLE/feature_listeners.py
+```
+
+The listener is the bridge between BlueST notifications and the CPSA runtime. It receives values from the BlueCoin feature callback, converts them into the format expected by the rest of the system, and forwards them either to the synchronizer, the buffer/classifier chain, or directly to the event queue.
+
+The current listener pattern is:
+
+```text
+BlueCoin feature notification
+        ▼
+Feature listener
+        ▼
+Parsed values + timestamp
+        ▼
+IMUSynchronizer.update(device_id, kind, values, ts)
+```
+
+The current synchronizer accepts only these `kind` values:
+
+```text
+acc
+gyr
+quat
+```
+
+Therefore, adding a new BlueCoin feature usually requires deciding where the new signal belongs:
+
+1. If it is part of the existing dual-wrist IMU classifier input, add a listener and extend `IMUSynchronizer`, `DataBuffer`, the C processing wrapper, and the classifier input format as needed.
+2. If it is an independent signal, add a listener that creates its own event and pushes it to the shared event queue. In this case, it does not need to pass through the current IMU synchronizer.
+3. If it is only used for diagnostics or logging, the listener can log or store the value without changing the classifier pipeline.
+
+To add a new BlueCoin feature, the normal implementation path is:
+
+1. verify the feature is exposed by the BlueCoin firmware, for example with the ST BLE Sensor app or a BlueST SDK example;
+2. import or implement the feature decoder;
+3. define a matching listener in `sensors/BLE/feature_listeners.py`;
+4. update `SensorManager.initialize_sensors()` to retrieve the feature with `node.get_feature(...)`;
+5. append both the feature and its listener to the `features` and `listeners` lists passed to `BlueCoinThread`;
+6. route the decoded values to the synchronizer, event queue, logger, or another pipeline.
+
+A listener should remain lightweight. Avoid heavy processing inside the BLE notification callback. Parse values, attach a timestamp, and pass the data to the correct downstream component.
+
 The synchronized row format is:
 
 ```text
@@ -705,6 +769,12 @@ This order stops event production and dispatching before releasing hardware reso
 
 ## Bluetooth and BlueST SDK Notes
 
+Official BlueST SDK Python repository:
+
+```text
+https://github.com/STMicroelectronics/BlueSTSDK_Python
+```
+
 ### Verify Bluetooth
 
 ```bash
@@ -783,6 +853,116 @@ groups
 sudo usermod -aG bluetooth <username>
 sudo reboot
 ```
+
+---
+
+
+## MetaWear / MetaMotion Notes
+
+This project uses MetaMotion devices as BLE haptic actuators. The Python package is installed through the MbientLab MetaWear SDK, while the runtime registers discovered MetaMotion devices under actuator IDs beginning with `meta_`.
+
+MetaWear SDK Python repository:
+
+```text
+https://github.com/mbientlab/MetaWear-SDK-Python/tree/master
+```
+
+Install the SDK dependency with:
+
+```bash
+pip install metawear
+```
+
+### PyWarble buffer overflow issue
+
+`warble` is installed automatically as a dependency of `metawear`. On the target setup, the release build can cause a buffer overflow. Rebuilding PyWarble in debug mode resolves the issue.
+
+PyWarble repository:
+
+```text
+https://github.com/mbientlab/PyWarble
+```
+
+To compile PyWarble in debug mode:
+
+1. Uninstall the automatically installed Warble package:
+
+```bash
+pip uninstall warble
+```
+
+2. Install Git if it is not already available:
+
+```bash
+sudo apt install git
+```
+
+3. Clone PyWarble with submodules:
+
+```bash
+git clone --recurse-submodules https://github.com/mbientlab/PyWarble.git
+```
+
+4. Move into the PyWarble directory:
+
+```bash
+cd PyWarble
+```
+
+5. Edit `setup.py`.
+
+Change the build command line from:
+
+```python
+args = ["make", "-C", warble, "-j%d" % (cpu_count())]
+```
+
+To:
+
+```python
+args = ["make", "-C", warble, "CONFIG=debug", "-j%d" % (cpu_count())]
+```
+
+Change the shared-library path from:
+
+```python
+so = os.path.join(warble, "dist", "release", "lib", machine)
+```
+
+To:
+
+```python
+so = os.path.join(warble, "dist", "debug", "lib", machine)
+```
+
+6. Install the local debug build:
+
+```bash
+pip install .
+```
+
+7. Verify the installation:
+
+```bash
+pip list | grep warble
+```
+
+`warble 1.2.8` should appear in the package list.
+
+### Runtime configuration
+
+MetaMotion actuation is enabled and configured in `config.yaml`:
+
+```yaml
+metamotion:
+  enable: true
+  scan_timeout: 2
+  fast_retry_attempts: 5
+  retry_interval: 5
+  retry_sleep: 60
+```
+
+When enabled, `ActuatorManager` scans for MetaMotion devices, creates `MetaMotionThread` instances, and registers them with IDs using the `meta_` prefix. The actuation policy uses that prefix to generate vibration parameters such as duty cycle and duration.
 
 ---
 
